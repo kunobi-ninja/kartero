@@ -4,10 +4,12 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { ARTIFACT_SCHEMA_VERSION, buildCoverageOtlp, parseCoverage, type CoverageFormat } from './coverage.js'
+import { buildGaugeOtlp, parseAttribute } from './gauge.js'
 import { validateArtifactDirectory } from './validate.js'
 
 const USAGE = `Usage:
   kartero coverage --input REPORT [--output DIR] [--format FORMAT]
+  kartero gauge --name NAME --value NUMBER [--attribute KEY=VALUE]... [--output DIR]
   kartero validate --input DIR
   kartero --version
 
@@ -26,6 +28,24 @@ function parseFlags(args: string[]): Map<string, string> {
     index += 1
   }
   return flags
+}
+
+function parseGaugeFlags(args: string[]): { flags: Map<string, string>; attributes: string[] } {
+  const flags = new Map<string, string>()
+  const attributes: string[] = []
+  for (let index = 0; index < args.length; index += 1) {
+    const flag = args[index]
+    if (flag === undefined || !flag.startsWith('--')) throw new Error(`unexpected argument ${flag ?? ''}`)
+    const value = args[index + 1]
+    if (value === undefined || value.startsWith('--')) throw new Error(`${flag} needs a value`)
+    if (flag === '--attribute') attributes.push(value)
+    else {
+      if (flags.has(flag)) throw new Error(`${flag} was provided more than once`)
+      flags.set(flag, value)
+    }
+    index += 1
+  }
+  return { flags, attributes }
 }
 
 function required(flags: Map<string, string>, name: string): string {
@@ -81,6 +101,27 @@ async function coverage(args: string[]): Promise<void> {
   console.log(`wrote Kartero coverage artifact to ${output}`)
 }
 
+async function gauge(args: string[]): Promise<void> {
+  const parsed = parseGaugeFlags(args)
+  const known = new Set(['--name', '--value', '--unit', '--output', '--service-name', '--service-namespace', '--timestamp'])
+  for (const flag of parsed.flags.keys()) if (!known.has(flag)) throw new Error(`unknown option ${flag}`)
+
+  const output = parsed.flags.get('--output') ?? 'telemetry'
+  const timestamp = parsed.flags.has('--timestamp') ? new Date(required(parsed.flags, '--timestamp')) : new Date()
+  const payload = buildGaugeOtlp(required(parsed.flags, '--name'), required(parsed.flags, '--value'), {
+    attributes: parsed.attributes.map(parseAttribute),
+    serviceName: parsed.flags.get('--service-name') ?? 'github-actions-ci',
+    serviceNamespace: parsed.flags.get('--service-namespace') ?? 'kunobi',
+    timestamp,
+    unit: parsed.flags.get('--unit') ?? '1',
+  })
+
+  await mkdir(output)
+  await writeFile(join(output, 'metrics.otlp.json'), `${JSON.stringify(payload)}\n`, { flag: 'wx' })
+  await writeFile(join(output, 'schema_version'), `${ARTIFACT_SCHEMA_VERSION}\n`, { flag: 'wx' })
+  console.log(`wrote Kartero gauge artifact to ${output}`)
+}
+
 async function main(): Promise<void> {
   const [command, ...args] = process.argv.slice(2)
   if (command === '--version' || command === '-v') {
@@ -93,6 +134,10 @@ async function main(): Promise<void> {
   }
   if (command === 'coverage') {
     await coverage(args)
+    return
+  }
+  if (command === 'gauge') {
+    await gauge(args)
     return
   }
   if (command === 'validate') {

@@ -15,3 +15,9 @@ npm exec --yes --cache "$npm_cache" --package "$smoke_dir/$tarball" -- kartero c
   --output "$smoke_dir/artifact" \
   --timestamp 2026-08-28T12:00:00Z
 npm exec --yes --cache "$npm_cache" --package "$smoke_dir/$tarball" -- kartero validate --input "$smoke_dir/artifact"
+npm exec --yes --cache "$npm_cache" --package "$smoke_dir/$tarball" -- kartero gauge \
+  --name kache.bench.verdict.ok \
+  --value 0 \
+  --attribute kache.bench.project=bench-firefox \
+  --output "$smoke_dir/gauge"
+npm exec --yes --cache "$npm_cache" --package "$smoke_dir/$tarball" -- kartero validate --input "$smoke_dir/gauge"
