@@ -1,6 +1,11 @@
 # Rust
 /target
 
+# Node.js CLI
+/packages/cli/dist/
+/packages/cli/node_modules/
+/packages/cli/*.tgz
+
 # Local working documents — design specs, plans, scratch notes.
 # Kept next to the code for convenience, never published.
 docs/superpowers/

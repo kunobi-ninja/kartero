@@ -16,6 +16,9 @@ metrics:
   - kache.ci.coverage.lines
   - kache.ci.coverage.lines.covered
   - kache.ci.coverage.lines.total
+  - ci.coverage.percent
+  - ci.coverage.covered
+  - ci.coverage.total
 
 attributes:
   - kache.telemetry.schema_version
@@ -26,6 +29,13 @@ attributes:
   - kache.bench.result
   - cicd.pipeline.name
   - vcs.repository.url.full
+  - service.namespace
+  - service.name
+  - deployment.environment
+  - telemetry.plane
+  - language
+  - kind
+  - branch_class
 
 projects:
   - bench-firefox

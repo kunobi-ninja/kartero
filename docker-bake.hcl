@@ -61,4 +61,5 @@ target "kartero" {
 target "kartero-push" {
   inherits = ["kartero"]
   output   = ["type=registry"]
+  attest   = ["type=provenance,mode=max", "type=sbom"]
 }

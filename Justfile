@@ -19,6 +19,22 @@ lint:
 test:
   cargo test --locked
 
+[group('dev')]
+cli-install:
+  npm ci --prefix packages/cli
+
+[group('dev')]
+cli-test:
+  npm test --prefix packages/cli
+
+[group('dev')]
+cli-package-test:
+  ./scripts/test-cli-package.sh
+
+[group('dev')]
+version-check expected="":
+  ./scripts/check-version-consistency.sh "{{expected}}"
+
 [group('deploy')]
 helm-lint:
   helm lint charts/kartero
