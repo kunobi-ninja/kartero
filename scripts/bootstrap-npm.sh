@@ -29,21 +29,27 @@ node -e 'const [major, minor, patch] = process.argv[1].split(".").map(Number); i
   exit 1
 }
 
-if npm view "$package" name >/dev/null 2>&1; then
+if ! npm whoami >/dev/null 2>&1; then
+  echo 'Opening npm web authentication...'
+  npm login --auth-type=web
+  npm whoami >/dev/null
+fi
+
+if npm access get status "$package" >/dev/null 2>&1; then
   echo "$package already exists; skipping placeholder publish."
 else
-  if ! npm whoami >/dev/null 2>&1; then
-    echo 'Opening npm web authentication...'
-    npm login --auth-type=web
-    npm whoami >/dev/null
-  fi
-
   if [[ "${1:-}" != '--yes' ]]; then
     read -r -p "Publish $package@0.0.0-bootstrap.0 under the bootstrap tag? [y/N] " answer
     [[ "$answer" == 'y' || "$answer" == 'Y' ]] || exit 1
   fi
 
   (cd "$placeholder" && npm publish --access public --tag bootstrap)
+fi
+
+latest_version="$(npm dist-tag ls "$package" | awk -F': ' '$1 == "latest" { print $2 }')"
+if [[ "$latest_version" == '0.0.0-bootstrap.0' ]]; then
+  echo 'Removing the placeholder from the latest tag...'
+  npm dist-tag rm "$package" latest
 fi
 
 npm trust github "$package" \
