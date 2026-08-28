@@ -2,8 +2,8 @@ apiVersion: v2
 name: kartero
 description: Pulls OTLP JSON from CI artifacts and delivers it to an OTLP/HTTP backend
 type: application
-version: 0.1.0
-appVersion: "0.1.0"
+version: 0.2.0
+appVersion: "0.2.0"
 keywords:
   - rust
   - otlp
@@ -20,4 +20,4 @@ annotations:
   artifacthub.io/prerelease: "false"
   artifacthub.io/images: |
     - name: kartero
-      image: docker.io/zondax/kartero:v0.1.0
+      image: docker.io/zondax/kartero:v0.2.0

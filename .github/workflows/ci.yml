@@ -19,6 +19,11 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: packages/cli/package-lock.json
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
           toolchain: 1.95.0
@@ -26,6 +31,12 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo clippy --all-targets --locked -- -D warnings
       - run: cargo test --locked
+      - run: npm ci
+        working-directory: packages/cli
+      - run: npm test
+        working-directory: packages/cli
+      - run: ./scripts/test-cli-package.sh
+      - run: ./scripts/check-version-consistency.sh
       - run: helm lint charts/kartero
       - run: helm template kartero charts/kartero >/dev/null
 
@@ -60,5 +71,6 @@ jobs:
           BUILD_VERSION: ${{ github.ref_name }}
           BUILD_COMMIT: ${{ github.sha }}
         run: |
-          export BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          export BUILD_DATE
           docker buildx bake -f docker-bake.hcl push

@@ -1,53 +1,85 @@
-# kartero
+# Kartero
 
-Pulls OTLP JSON that CI already wrote, and delivers it to an OTLP/HTTP
-backend. It does not produce telemetry, convert formats, or hold backend
-credentials in GitHub Actions.
-
-Nightly kache benches and trusted `main` CI runs upload
-`telemetry-otlp-v1-*` artifacts. Kartero lists `bench.yml` and `ci.yml`
-with a read-only GitHub token. It accepts scheduled runs and `main` pushes,
-rejects pull-request telemetry, validates each zip, applies the reviewed
-allowlist, adds a small `cicd.*` / `vcs.*` envelope, and POSTs the request.
+Kartero carries engineering telemetry from CI into an OTLP backend such as
+SigNoz. CI creates a small, validated artifact. The in-cluster service reads
+trusted GitHub Actions runs, filters the payload, and delivers it once.
 
 ```text
-bench / main CI job               cluster
-  └─ metrics.otlp.json             └─ kartero (Deployment)
-       └─ upload-artifact               ├─ Actions: read PAT
-                                        ├─ allowlist + ledger
-                                        └─ OTLP/HTTP → SigNoz
+coverage tool -> @kunobi/kartero -> GitHub artifact -> Kartero -> OTLP/SigNoz
 ```
 
-## Run
+## Export coverage
 
-```text
-KARTERO_GITHUB_TOKEN=… \
+The public npm package accepts Istanbul summary JSON, LLVM coverage export JSON,
+and LCOV. It does not need credentials or network access.
+
+```bash
+npx --yes @kunobi/kartero@0.2.0 coverage \
+  --input coverage/coverage-summary.json \
+  --output telemetry
+```
+
+Upload the resulting directory as a GitHub Actions artifact whose name starts
+with `telemetry-otlp-v1`:
+
+```yaml
+- if: always()
+  run: npx --yes @kunobi/kartero@0.2.0 coverage \
+    --input coverage/coverage-summary.json --output telemetry
+- if: always()
+  uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+  with:
+    name: telemetry-otlp-v1-coverage
+    path: telemetry/
+    if-no-files-found: error
+```
+
+See [coverage setup](docs/coverage.md) and the
+[artifact protocol](docs/artifact-protocol.md).
+
+## Run the collector
+
+```bash
+KARTERO_GITHUB_TOKEN=... \
 KARTERO_OTLP_ENDPOINT=http://localhost:4318 \
 KARTERO_ALLOWLIST=./allowlist.yaml \
 KARTERO_LEDGER=./tmp/ledger.sqlite \
-  kartero collect          # one pass
-  kartero run              # HTTP /metrics + collect on KARTERO_INTERVAL
+  kartero collect
 ```
 
-`KARTERO_GITHUB_TOKEN` is required. The chart always reads it from the
-Secret named by `github.existingSecret`; it will not start without that
-Secret and key. The platform may create the Secret with External Secrets.
+The token needs read access to the source repository and `Actions: read`.
+Kartero stores delivery state in SQLite so a restart does not import the same
+artifact again. SigNoz is only the destination; it is not the deduplication
+store.
 
-Kartero emits `kartero.process.up`, process start time, and uptime immediately
-after its HTTP listener starts, then repeats that heartbeat every minute by
-default. After each collect pass it POSTs `kartero.collect.*` gauges to the
-same OTLP endpoint, and serves Prometheus `/metrics` for scrape.
-Those gauges include configured sources, runs seen/trusted, artifacts
-seen/matched/delivered, filtered series, bounded error components, duration,
-and pass status. Logs are JSON on stdout; GitHub API failures include the
-request error and cause the pass status plus `github` error count to fail.
+For Kubernetes, install the OCI chart and supply the token through a Kubernetes
+Secret, commonly managed by External Secrets:
 
-The SQLite ledger records each artifact by repository, run, attempt,
-artifact ID, digest, and schema version. Delivered, rejected, and held
-artifacts are terminal. Only temporary transport failures are retried.
+```bash
+helm install kartero oci://registry-1.docker.io/zondax/kartero \
+  --version 0.2.0 \
+  --namespace signoz \
+  --set github.owner=kunobi-ninja \
+  --set github.repo=kunobi-frontend \
+  --set github.existingSecret=kartero-github
+```
 
-The Helm chart lives in `charts/kartero`. It is a Deployment (not a
-CronJob) so the ledger PVC stays single-writer and SigNoz can scrape
-`/metrics`. The chart always mounts ledger storage: `pvc` is the default;
-use `ephemeral` only for disposable local tests. Pin the image tag in the
-cluster; do not track `latest`.
+Persistent ledger storage is the chart default. Use `ephemeral` only for local
+or disposable installations. See [deployment](docs/deployment.md).
+
+## Runtime telemetry
+
+Kartero exposes `/healthz`, `/readyz`, and Prometheus `/metrics`. It also sends
+its heartbeat and collection metrics to the configured OTLP endpoint. JSON logs
+include GitHub, artifact, validation, ledger, and OTLP failures.
+
+## Documentation
+
+- [Architecture](docs/architecture.md)
+- [Coverage exporters](docs/coverage.md)
+- [Artifact protocol](docs/artifact-protocol.md)
+- [Deployment](docs/deployment.md)
+- [Security](docs/security.md)
+- [Releasing](docs/releasing.md)
+
+Kartero is licensed under Apache-2.0.

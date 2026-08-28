@@ -1,0 +1,175 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kartero-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          toolchain: 1.95.0
+          components: clippy, rustfmt
+      - name: Resolve version
+        id: version
+        env:
+          RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+        run: |
+          version="$(./scripts/check-version-consistency.sh "$RELEASE_TAG")"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Require tagged commit on main
+        if: github.ref_type == 'tag'
+        run: |
+          git fetch origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --all-targets --locked -- -D warnings
+      - run: cargo test --locked
+      - run: npm ci
+        working-directory: packages/cli
+      - run: npm test
+        working-directory: packages/cli
+      - run: ./scripts/test-cli-package.sh
+      - run: helm lint charts/kartero
+      - run: helm template kartero charts/kartero >/dev/null
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - run: ./scripts/test-tag-semantics.sh
+      - name: Build image
+        env:
+          IMAGE_TAG: test
+          BUILD_VERSION: ${{ github.ref_name }}
+          BUILD_COMMIT: ${{ github.sha }}
+        run: |
+          BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          export BUILD_DATE
+          docker buildx bake -f docker-bake.hcl --set '*.cache-from='
+
+  image:
+    if: github.ref_type == 'tag'
+    needs: gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USER }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Build and publish image
+        env:
+          IMAGE_TAG: ""
+          VERSION: ${{ needs.gate.outputs.version }}
+          BUILD_VERSION: ${{ github.ref_name }}
+          BUILD_COMMIT: ${{ github.sha }}
+        run: |
+          BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          export BUILD_DATE
+          docker buildx bake -f docker-bake.hcl push
+
+  npm:
+    if: github.ref_type == 'tag'
+    needs: [gate, image]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - run: npm install --global npm@11.5.1
+      - run: npm ci
+        working-directory: packages/cli
+      - run: npm run build
+        working-directory: packages/cli
+      - name: Publish public package with provenance
+        working-directory: packages/cli
+        env:
+          VERSION: ${{ needs.gate.outputs.version }}
+        run: |
+          if npm view "@kunobi/kartero@$VERSION" version >/dev/null 2>&1; then
+            echo "@kunobi/kartero@$VERSION already exists"
+          else
+            npm publish --access public --provenance
+          fi
+
+  chart:
+    if: github.ref_type == 'tag'
+    needs: [gate, npm]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Package chart
+        env:
+          VERSION: ${{ needs.gate.outputs.version }}
+        run: |
+          mkdir -p dist
+          helm package charts/kartero --version "$VERSION" --app-version "$VERSION" --destination dist
+      - name: Login to Docker Hub
+        env:
+          DOCKERHUB_USER: ${{ secrets.DOCKERHUB_USER }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: echo "$DOCKERHUB_TOKEN" | helm registry login registry-1.docker.io --username "$DOCKERHUB_USER" --password-stdin
+      - name: Publish chart
+        env:
+          VERSION: ${{ needs.gate.outputs.version }}
+        run: |
+          if helm show chart "oci://registry-1.docker.io/zondax/kartero" --version "$VERSION" >/dev/null 2>&1; then
+            echo "zondax/kartero:$VERSION already exists"
+          else
+            helm push "dist/kartero-$VERSION.tgz" oci://registry-1.docker.io/zondax
+          fi
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: kartero-chart-${{ needs.gate.outputs.version }}
+          path: dist/kartero-${{ needs.gate.outputs.version }}.tgz
+          if-no-files-found: error
+
+  github-release:
+    if: github.ref_type == 'tag'
+    needs: [gate, chart]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          name: kartero-chart-${{ needs.gate.outputs.version }}
+          path: dist
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" dist/*.tgz --clobber
+          else
+            gh release create "$RELEASE_TAG" dist/*.tgz --verify-tag --generate-notes
+          fi
