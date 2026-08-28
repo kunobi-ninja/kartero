@@ -63,6 +63,8 @@ spec:
               value: {{ .Values.logLevel | quote }}
             - name: KARTERO_INTERVAL
               value: {{ .Values.interval | quote }}
+            - name: KARTERO_HEARTBEAT_INTERVAL
+              value: {{ .Values.heartbeatInterval | quote }}
             - name: KARTERO_GITHUB_OWNER
               value: {{ .Values.github.owner | quote }}
             - name: KARTERO_GITHUB_REPO

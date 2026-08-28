@@ -7,6 +7,7 @@ use std::time::Duration;
 pub struct Config {
     pub bind: String,
     pub interval: Duration,
+    pub heartbeat_interval: Duration,
     pub github: GitHubConfig,
     pub otlp_endpoint: String,
     pub allowlist_path: PathBuf,
@@ -29,6 +30,8 @@ struct FileConfig {
     bind: String,
     #[serde(default = "default_interval")]
     interval: String,
+    #[serde(default = "default_heartbeat_interval")]
+    heartbeat_interval: String,
     github: FileGitHub,
     otlp: FileOtlp,
     allowlist: PathBuf,
@@ -61,6 +64,9 @@ fn default_bind() -> String {
 fn default_interval() -> String {
     "1h".into()
 }
+fn default_heartbeat_interval() -> String {
+    "1m".into()
+}
 fn default_prefix() -> String {
     "telemetry-otlp-v1".into()
 }
@@ -88,6 +94,10 @@ impl Config {
             bind: std::env::var("KARTERO_BIND").unwrap_or_else(|_| default_bind()),
             interval: parse_duration(
                 &std::env::var("KARTERO_INTERVAL").unwrap_or_else(|_| default_interval()),
+            )?,
+            heartbeat_interval: parse_duration(
+                &std::env::var("KARTERO_HEARTBEAT_INTERVAL")
+                    .unwrap_or_else(|_| default_heartbeat_interval()),
             )?,
             github: GitHubConfig {
                 token,
@@ -134,6 +144,7 @@ impl Config {
         Ok(Self {
             bind: file.bind,
             interval: parse_duration(&file.interval)?,
+            heartbeat_interval: parse_duration(&file.heartbeat_interval)?,
             github: GitHubConfig {
                 token,
                 owner: file.github.owner,
@@ -199,6 +210,7 @@ mod tests {
     fn parses_hour_interval() {
         assert_eq!(parse_duration("1h").unwrap(), Duration::from_secs(3600));
         assert_eq!(parse_duration("30m").unwrap(), Duration::from_secs(1800));
+        assert_eq!(parse_duration("15s").unwrap(), Duration::from_secs(15));
         assert!(parse_duration("0s").is_err());
     }
 

@@ -33,6 +33,7 @@ otlp:
   endpoint: http://signoz-otel-collector.signoz.svc.cluster.local:4318
 
 interval: 1h
+heartbeatInterval: 1m
 
 ledger:
   path: /var/lib/kartero/ledger.sqlite
@@ -80,9 +81,9 @@ resources:
     memory: 128Mi
 
 # Own telemetry reaches SigNoz two ways: scrape of /metrics (these
-# annotations) and an OTLP/HTTP POST of kartero.collect.* gauges to
-# otlp.endpoint after every collect pass. Logs are JSON on stdout so the
-# cluster's signoz-agents log collection picks them up.
+# annotations) and OTLP/HTTP posts to otlp.endpoint. Process heartbeat
+# gauges are sent on heartbeatInterval; kartero.collect.* follows each
+# collect pass. Logs are JSON on stdout for signoz-agents.
 signoz:
   scrape: true
   path: /metrics
