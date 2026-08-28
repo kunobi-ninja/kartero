@@ -90,10 +90,8 @@ spec:
             - name: allowlist
               mountPath: {{ .Values.allowlist.mountPath | quote }}
               readOnly: true
-            {{- if .Values.ledger.persistence.enabled }}
             - name: ledger
               mountPath: {{ .Values.ledger.persistence.mountPath | quote }}
-            {{- end }}
           readinessProbe:
             httpGet:
               path: /readyz
@@ -112,7 +110,6 @@ spec:
         - name: allowlist
           configMap:
             name: {{ include "kartero.fullname" . }}-allowlist
-        {{- if .Values.ledger.persistence.enabled }}
         - name: ledger
           {{- if eq .Values.ledger.persistence.type "ephemeral" }}
           emptyDir: {}
@@ -122,7 +119,6 @@ spec:
           {{- else }}
           {{- fail "ledger.persistence.type must be 'ephemeral' or 'pvc'" }}
           {{- end }}
-        {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

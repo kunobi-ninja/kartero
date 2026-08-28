@@ -38,4 +38,6 @@ artifacts are terminal. Only temporary transport failures are retried.
 
 The Helm chart lives in `charts/kartero`. It is a Deployment (not a
 CronJob) so the ledger PVC stays single-writer and SigNoz can scrape
-`/metrics`. Pin the image tag in the cluster; do not track `latest`.
+`/metrics`. The chart always mounts ledger storage: `pvc` is the default;
+use `ephemeral` only for disposable local tests. Pin the image tag in the
+cluster; do not track `latest`.

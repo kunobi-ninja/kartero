@@ -34,7 +34,6 @@ interval: 1h
 ledger:
   path: /var/lib/kartero/ledger.sqlite
   persistence:
-    enabled: true
     type: pvc
     mountPath: /var/lib/kartero
     size: 1Gi

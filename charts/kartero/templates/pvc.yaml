@@ -1,4 +1,4 @@
-{{- if and .Values.ledger.persistence.enabled (eq .Values.ledger.persistence.type "pvc") }}
+{{- if eq .Values.ledger.persistence.type "pvc" }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
