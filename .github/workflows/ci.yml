@@ -36,6 +36,7 @@ jobs:
       - run: npm test
         working-directory: packages/cli
       - run: ./scripts/test-cli-package.sh
+      - run: npm pack --dry-run ./packages/npm-placeholder
       - run: ./scripts/check-version-consistency.sh
       - run: helm lint charts/kartero
       - run: helm template kartero charts/kartero >/dev/null
