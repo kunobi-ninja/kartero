@@ -35,6 +35,10 @@ cli-package-test:
 version-check expected="":
   ./scripts/check-version-consistency.sh "{{expected}}"
 
+[group('release')]
+bootstrap-npm:
+  ./scripts/bootstrap-npm.sh
+
 [group('deploy')]
 helm-lint:
   helm lint charts/kartero

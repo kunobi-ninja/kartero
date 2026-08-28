@@ -18,11 +18,17 @@ The release workflow accepts tags whose commit is reachable from `main`. It
 tests every artifact before publishing, then publishes the image, npm package,
 chart, and GitHub release in that order.
 
-npm publishing uses a Trusted Publisher and GitHub OIDC. A brand-new package has
-no settings page, so publish `@kunobi/kartero` once from a maintainer session
-with 2FA. Then configure `kunobi-ninja/kartero`, workflow `release.yml`, and
-`npm publish` permission under the package's Trusted Publisher settings. The
-release workflow does not use an `NPM_TOKEN` secret.
+npm publishing uses a Trusted Publisher and GitHub OIDC. Bootstrap the package
+once from a maintainer session with 2FA:
+
+```bash
+./scripts/bootstrap-npm.sh
+```
+
+The script publishes `0.0.0-bootstrap.0` under the non-default `bootstrap` tag,
+opening npm's web login first when needed. It then authorizes `release.yml` with
+`npm publish` permission. Version `0.2.0` remains available for the first real
+release. The workflow does not use an `NPM_TOKEN` secret.
 
 Docker Hub publishing uses `DOCKERHUB_USER` and `DOCKERHUB_TOKEN`. The token
 needs write access to `zondax/kartero`.

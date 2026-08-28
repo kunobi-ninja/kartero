@@ -1,0 +1,17 @@
+{
+  "name": "@kunobi/kartero",
+  "version": "0.0.0-bootstrap.0",
+  "description": "Registry bootstrap placeholder for @kunobi/kartero.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kunobi-ninja/kartero.git"
+  },
+  "files": [
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "tag": "bootstrap"
+  }
+}
