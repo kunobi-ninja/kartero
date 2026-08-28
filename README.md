@@ -33,8 +33,10 @@ KARTERO_LEDGER=./tmp/ledger.sqlite \
 Secret named by `github.existingSecret`; it will not start without that
 Secret and key. The platform may create the Secret with External Secrets.
 
-After each collect pass kartero POSTs its own gauges (`kartero.collect.*`)
-to the same OTLP endpoint, and serves Prometheus `/metrics` for scrape.
+Kartero emits `kartero.process.up`, process start time, and uptime immediately
+after its HTTP listener starts, then repeats that heartbeat every minute by
+default. After each collect pass it POSTs `kartero.collect.*` gauges to the
+same OTLP endpoint, and serves Prometheus `/metrics` for scrape.
 Those gauges include configured sources, runs seen/trusted, artifacts
 seen/matched/delivered, filtered series, bounded error components, duration,
 and pass status. Logs are JSON on stdout; GitHub API failures include the

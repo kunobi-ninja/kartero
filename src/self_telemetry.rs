@@ -2,7 +2,7 @@
 //! producer payloads to, so Signoz sees the collector even when scrape
 //! annotations are inert.
 //!
-//! Gauges, one observation per collect pass. No OpenTelemetry SDK.
+//! Gauges for collect passes and process heartbeats. No OpenTelemetry SDK.
 
 use crate::VERSION;
 use anyhow::{Context, Result};
@@ -27,6 +27,12 @@ pub struct CollectSnapshot {
     pub points_dropped: u64,
     pub github_errors: u64,
     pub ingest_errors: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ProcessSnapshot {
+    pub start_time_unix_s: u64,
+    pub uptime_s: f64,
 }
 
 impl CollectSnapshot {
@@ -87,25 +93,80 @@ pub fn serialize(snapshot: &CollectSnapshot) -> Value {
     })
 }
 
+pub fn serialize_process(snapshot: &ProcessSnapshot) -> Value {
+    let time = now_unix_nano();
+    let attrs: Vec<Value> = Vec::new();
+    json!({
+        "resourceMetrics": [{
+            "resource": {
+                "attributes": [
+                    str_attr("service.name", "kartero"),
+                    str_attr("service.version", VERSION),
+                ]
+            },
+            "scopeMetrics": [{
+                "scope": { "name": "kartero", "version": VERSION },
+                "metrics": [
+                    gauge("kartero.process.up", "1", vec![as_int(1, &time, &attrs)]),
+                    gauge("kartero.process.uptime", "s", vec![as_double(snapshot.uptime_s, &time, &attrs)]),
+                    gauge(
+                        "kartero.process.start_time",
+                        "s",
+                        vec![as_int(snapshot.start_time_unix_s, &time, &attrs)],
+                    ),
+                ]
+            }]
+        }]
+    })
+}
+
 pub async fn post(
     client: &reqwest::Client,
     endpoint: &str,
     snapshot: &CollectSnapshot,
 ) -> Result<()> {
+    post_body(
+        client,
+        endpoint,
+        serialize(snapshot),
+        "kartero self-telemetry",
+    )
+    .await
+}
+
+pub async fn post_process(
+    client: &reqwest::Client,
+    endpoint: &str,
+    snapshot: &ProcessSnapshot,
+) -> Result<()> {
+    post_body(
+        client,
+        endpoint,
+        serialize_process(snapshot),
+        "kartero heartbeat",
+    )
+    .await
+}
+
+async fn post_body(
+    client: &reqwest::Client,
+    endpoint: &str,
+    body: Value,
+    operation: &str,
+) -> Result<()> {
     let url = format!("{}/v1/metrics", endpoint.trim_end_matches('/'));
-    let body = serde_json::to_vec(&serialize(snapshot))?;
     let response = client
         .post(url)
         .header(reqwest::header::CONTENT_TYPE, "application/json")
-        .body(body)
+        .body(serde_json::to_vec(&body)?)
         .send()
         .await
-        .context("posting kartero self-telemetry")?;
+        .with_context(|| format!("posting {operation}"))?;
     let status = response.status();
     if status.is_success() {
         return Ok(());
     }
-    anyhow::bail!("kartero self-telemetry rejected with {status}");
+    anyhow::bail!("{operation} rejected with {status}");
 }
 
 fn now_unix_nano() -> String {
@@ -185,5 +246,31 @@ mod tests {
             &body["resourceMetrics"][0]["scopeMetrics"][0]["metrics"][0]["gauge"]["dataPoints"][0];
         assert!(duration["timeUnixNano"].is_string());
         assert_eq!(duration["asDouble"], 1.5);
+    }
+
+    #[test]
+    fn process_payload_reports_start_and_heartbeat() {
+        let body = serialize_process(&ProcessSnapshot {
+            start_time_unix_s: 1_700_000_000,
+            uptime_s: 12.5,
+        });
+        let metrics = body["resourceMetrics"][0]["scopeMetrics"][0]["metrics"]
+            .as_array()
+            .unwrap();
+        let names: Vec<_> = metrics
+            .iter()
+            .map(|metric| metric["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "kartero.process.up",
+                "kartero.process.uptime",
+                "kartero.process.start_time",
+            ]
+        );
+        assert_eq!(metrics[0]["gauge"]["dataPoints"][0]["asInt"], "1");
+        assert_eq!(metrics[1]["gauge"]["dataPoints"][0]["asDouble"], 12.5);
+        assert_eq!(metrics[2]["gauge"]["dataPoints"][0]["asInt"], "1700000000");
     }
 }

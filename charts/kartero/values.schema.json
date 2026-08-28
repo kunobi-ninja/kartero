@@ -43,6 +43,7 @@
       "required": ["endpoint"]
     },
     "interval": { "type": "string", "minLength": 1 },
+    "heartbeatInterval": { "type": "string", "minLength": 1 },
     "ledger": {
       "type": "object",
       "properties": {
