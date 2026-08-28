@@ -29,9 +29,16 @@ KARTERO_LEDGER=./tmp/ledger.sqlite \
   kartero run              # HTTP /metrics + collect on KARTERO_INTERVAL
 ```
 
+`KARTERO_GITHUB_TOKEN` is required. The chart always reads it from the
+Secret named by `github.existingSecret`; it will not start without that
+Secret and key. The platform may create the Secret with External Secrets.
+
 After each collect pass kartero POSTs its own gauges (`kartero.collect.*`)
 to the same OTLP endpoint, and serves Prometheus `/metrics` for scrape.
-Logs are JSON on stdout.
+Those gauges include configured sources, runs seen/trusted, artifacts
+seen/matched/delivered, filtered series, bounded error components, duration,
+and pass status. Logs are JSON on stdout; GitHub API failures include the
+request error and cause the pass status plus `github` error count to fail.
 
 The SQLite ledger records each artifact by repository, run, attempt,
 artifact ID, digest, and schema version. Delivered, rejected, and held

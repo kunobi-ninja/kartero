@@ -13,6 +13,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub struct CollectSnapshot {
     pub duration_s: f64,
     pub ok: bool,
+    pub sources: u64,
+    pub runs_seen: u64,
+    pub runs_trusted: u64,
+    pub artifacts_seen: u64,
+    pub artifacts_matched: u64,
     pub delivered: u64,
     pub skipped: u64,
     pub held: u64,
@@ -20,6 +25,8 @@ pub struct CollectSnapshot {
     pub metrics_kept: u64,
     pub metrics_dropped: u64,
     pub points_dropped: u64,
+    pub github_errors: u64,
+    pub ingest_errors: u64,
 }
 
 impl CollectSnapshot {
@@ -50,6 +57,15 @@ pub fn serialize(snapshot: &CollectSnapshot) -> Value {
                 "metrics": [
                     gauge("kartero.collect.duration", "s", vec![as_double(snapshot.duration_s, &time, &run_attrs)]),
                     gauge("kartero.collect.ok", "1", vec![as_int(u64::from(snapshot.ok), &time, &run_attrs)]),
+                    gauge("kartero.collect.sources", "{source}", vec![as_int(snapshot.sources, &time, &run_attrs)]),
+                    gauge("kartero.collect.runs", "{run}", vec![
+                        as_int(snapshot.runs_seen, &time, &[str_attr("kartero.run.state", "seen")]),
+                        as_int(snapshot.runs_trusted, &time, &[str_attr("kartero.run.state", "trusted")]),
+                    ]),
+                    gauge("kartero.collect.artifacts_discovered", "{artifact}", vec![
+                        as_int(snapshot.artifacts_seen, &time, &[str_attr("kartero.discovery.state", "seen")]),
+                        as_int(snapshot.artifacts_matched, &time, &[str_attr("kartero.discovery.state", "matched")]),
+                    ]),
                     gauge("kartero.collect.artifacts", "{artifact}", vec![
                         as_int(snapshot.delivered, &time, &[str_attr("kartero.artifact.outcome", "delivered")]),
                         as_int(snapshot.skipped, &time, &[str_attr("kartero.artifact.outcome", "skipped")]),
@@ -60,6 +76,10 @@ pub fn serialize(snapshot: &CollectSnapshot) -> Value {
                     gauge("kartero.collect.series_dropped", "{series}", vec![
                         as_int(snapshot.metrics_dropped, &time, &[str_attr("kartero.drop.kind", "metric")]),
                         as_int(snapshot.points_dropped, &time, &[str_attr("kartero.drop.kind", "point")]),
+                    ]),
+                    gauge("kartero.collect.errors", "{error}", vec![
+                        as_int(snapshot.github_errors, &time, &[str_attr("kartero.error.component", "github")]),
+                        as_int(snapshot.ingest_errors, &time, &[str_attr("kartero.error.component", "ingest")]),
                     ]),
                 ]
             }]
@@ -129,6 +149,11 @@ mod tests {
         let body = serialize(&CollectSnapshot {
             duration_s: 1.5,
             ok: true,
+            sources: 2,
+            runs_seen: 10,
+            runs_trusted: 2,
+            artifacts_seen: 4,
+            artifacts_matched: 3,
             delivered: 2,
             skipped: 1,
             held: 0,
@@ -136,6 +161,8 @@ mod tests {
             metrics_kept: 12,
             metrics_dropped: 3,
             points_dropped: 4,
+            github_errors: 1,
+            ingest_errors: 2,
         });
         assert_eq!(
             body["resourceMetrics"][0]["resource"]["attributes"][0]["value"]["stringValue"],
@@ -149,6 +176,8 @@ mod tests {
             .collect();
         assert!(names.contains(&"kartero.collect.duration"));
         assert!(names.contains(&"kartero.collect.series_dropped"));
+        assert!(names.contains(&"kartero.collect.sources"));
+        assert!(names.contains(&"kartero.collect.errors"));
         let dumped = body.to_string();
         assert!(!dumped.contains("cicd."));
         assert!(!dumped.contains("run_id"));

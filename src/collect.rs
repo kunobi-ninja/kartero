@@ -13,11 +13,14 @@ use tracing::{info, warn};
 
 pub async fn collect_once(config: &Config) -> Result<()> {
     let started = Instant::now();
-    let mut snapshot = CollectSnapshot::default();
+    let mut snapshot = CollectSnapshot {
+        sources: config.github.workflows.len() as u64,
+        ..CollectSnapshot::default()
+    };
     let result = collect_inner(config, &mut snapshot).await;
     snapshot.ok = result.is_ok();
     snapshot.duration_s = started.elapsed().as_secs_f64();
-    Metrics::global().observe_collect(snapshot.duration_s, snapshot.ok);
+    Metrics::global().observe_collect(&snapshot);
     emit_self_telemetry(config, &snapshot).await;
     result
 }
@@ -49,24 +52,36 @@ async fn collect_inner(config: &Config, snapshot: &mut CollectSnapshot) -> Resul
         .timeout(Duration::from_secs(60))
         .build()?;
 
-    let runs = github.list_completed_runs().await?;
+    let runs = match github.list_completed_runs().await {
+        Ok(runs) => runs,
+        Err(err) => {
+            snapshot.github_errors += 1;
+            warn!(error = %err, "listing completed GitHub workflow runs failed");
+            return Err(err);
+        }
+    };
+    snapshot.runs_seen = runs.len() as u64;
     let mut had_errors = false;
     for run in runs {
         if !github.trusted(&run) {
             continue;
         }
+        snapshot.runs_trusted += 1;
         let artifacts = match github.list_artifacts(run.run_id).await {
             Ok(list) => list,
             Err(err) => {
                 warn!(run_id = run.run_id, error = %err, "listing artifacts failed");
+                snapshot.github_errors += 1;
                 had_errors = true;
                 continue;
             }
         };
+        snapshot.artifacts_seen += artifacts.len() as u64;
         for artifact in artifacts {
             if !artifact_name_matches(&artifact.name, &config.artifact_prefix) {
                 continue;
             }
+            snapshot.artifacts_matched += 1;
             if let Err(err) = ingest_one(
                 config, &allowlist, &ledger, &github, &client, metrics, snapshot, &run, &artifact,
             )
@@ -79,6 +94,7 @@ async fn collect_inner(config: &Config, snapshot: &mut CollectSnapshot) -> Resul
                     "ingest failed"
                 );
                 record_artifact(metrics, snapshot, "retryable");
+                snapshot.ingest_errors += 1;
                 had_errors = true;
             }
         }

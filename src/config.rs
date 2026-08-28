@@ -83,6 +83,7 @@ impl Config {
                 .to_string(),
             Err(_) => std::env::var("KARTERO_GITHUB_TOKEN").unwrap_or_default(),
         };
+        let token = require_github_token(token)?;
         Ok(Self {
             bind: std::env::var("KARTERO_BIND").unwrap_or_else(|_| default_bind()),
             interval: parse_duration(
@@ -129,6 +130,7 @@ impl Config {
         } else {
             file.github.token
         };
+        let token = require_github_token(token)?;
         Ok(Self {
             bind: file.bind,
             interval: parse_duration(&file.interval)?,
@@ -181,6 +183,14 @@ fn validate_workflows(workflows: Vec<String>) -> Result<Vec<String>> {
     Ok(workflows)
 }
 
+fn require_github_token(token: String) -> Result<String> {
+    let token = token.trim().to_string();
+    if token.is_empty() {
+        bail!("KARTERO_GITHUB_TOKEN or KARTERO_GITHUB_TOKEN_FILE is required");
+    }
+    Ok(token)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -200,5 +210,12 @@ mod tests {
         );
         assert!(parse_workflows("").is_err());
         assert!(parse_workflows("bench.yml,").is_err());
+    }
+
+    #[test]
+    fn github_token_is_required() {
+        assert!(require_github_token(String::new()).is_err());
+        assert!(require_github_token("  ".into()).is_err());
+        assert_eq!(require_github_token(" token\n".into()).unwrap(), "token");
     }
 }

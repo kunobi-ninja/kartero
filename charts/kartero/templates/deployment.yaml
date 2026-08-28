@@ -79,13 +79,12 @@ spec:
               value: {{ printf "%s/allowlist.yaml" .Values.allowlist.mountPath | quote }}
             - name: KARTERO_LEDGER
               value: {{ .Values.ledger.path | quote }}
-            {{- if .Values.github.existingSecret }}
             - name: KARTERO_GITHUB_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.github.existingSecret | quote }}
-                  key: {{ .Values.github.existingSecretKey | quote }}
-            {{- end }}
+                  name: {{ required "github.existingSecret is required" .Values.github.existingSecret | quote }}
+                  key: {{ required "github.existingSecretKey is required" .Values.github.existingSecretKey | quote }}
+                  optional: false
           volumeMounts:
             - name: allowlist
               mountPath: {{ .Values.allowlist.mountPath | quote }}

@@ -22,9 +22,10 @@ github:
     - ci.yml
   trustedBranch: main
   artifactPrefix: telemetry-otlp-v1
-  # Fine-grained PAT with Actions: read (and Metadata: read, which GitHub
-  # attaches to every fine-grained token). Chart does not create the Secret.
-  existingSecret: ""
+  # Required Secret containing a fine-grained PAT with Actions: read and
+  # Metadata: read. The chart references the Secret; External Secrets or
+  # another platform controller owns its creation.
+  existingSecret: kartero-github
   existingSecretKey: token
 
 otlp:

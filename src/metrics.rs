@@ -1,3 +1,4 @@
+use crate::self_telemetry::CollectSnapshot;
 use prometheus::{
     Encoder, Histogram, IntCounterVec, IntGauge, Registry, TextEncoder, histogram_opts, opts,
 };
@@ -11,6 +12,10 @@ pub struct Metrics {
     collect_passes: IntCounterVec,
     collect_duration: Histogram,
     last_collect_unix: IntGauge,
+    sources: IntGauge,
+    runs: IntCounterVec,
+    artifacts_discovered: IntCounterVec,
+    collect_errors: IntCounterVec,
 }
 
 impl Metrics {
@@ -64,6 +69,32 @@ impl Metrics {
             "Unix time of the last finished collect pass.",
         )
         .expect("last collect gauge");
+        let sources = IntGauge::new(
+            "kartero_sources_configured",
+            "GitHub workflows configured as telemetry sources.",
+        )
+        .expect("sources gauge");
+        let runs = IntCounterVec::new(
+            opts!("kartero_runs_total", "Workflow runs observed by Kartero."),
+            &["state"],
+        )
+        .expect("runs counter");
+        let artifacts_discovered = IntCounterVec::new(
+            opts!(
+                "kartero_artifacts_discovered_total",
+                "Artifacts discovered before delivery outcome processing."
+            ),
+            &["state"],
+        )
+        .expect("artifact discovery counter");
+        let collect_errors = IntCounterVec::new(
+            opts!(
+                "kartero_collect_errors_total",
+                "Collect errors split by bounded component."
+            ),
+            &["component"],
+        )
+        .expect("collect errors counter");
         registry
             .register(Box::new(artifacts.clone()))
             .expect("register artifacts");
@@ -82,6 +113,18 @@ impl Metrics {
         registry
             .register(Box::new(last_collect_unix.clone()))
             .expect("register last collect");
+        registry
+            .register(Box::new(sources.clone()))
+            .expect("register sources");
+        registry
+            .register(Box::new(runs.clone()))
+            .expect("register runs");
+        registry
+            .register(Box::new(artifacts_discovered.clone()))
+            .expect("register artifact discovery");
+        registry
+            .register(Box::new(collect_errors.clone()))
+            .expect("register collect errors");
         for outcome in ["delivered", "skipped", "held", "retryable"] {
             let _ = artifacts.with_label_values(&[outcome]);
         }
@@ -92,6 +135,15 @@ impl Metrics {
         for outcome in ["ok", "error"] {
             let _ = collect_passes.with_label_values(&[outcome]);
         }
+        for state in ["seen", "trusted"] {
+            let _ = runs.with_label_values(&[state]);
+        }
+        for state in ["seen", "matched"] {
+            let _ = artifacts_discovered.with_label_values(&[state]);
+        }
+        for component in ["github", "ingest"] {
+            let _ = collect_errors.with_label_values(&[component]);
+        }
         Self {
             registry,
             artifacts,
@@ -100,6 +152,10 @@ impl Metrics {
             collect_passes,
             collect_duration,
             last_collect_unix,
+            sources,
+            runs,
+            artifacts_discovered,
+            collect_errors,
         }
     }
 
@@ -115,11 +171,30 @@ impl Metrics {
         self.series_kept.with_label_values(&["metric"]).inc_by(n);
     }
 
-    pub fn observe_collect(&self, duration_s: f64, ok: bool) {
-        self.collect_duration.observe(duration_s);
+    pub fn observe_collect(&self, snapshot: &CollectSnapshot) {
+        self.collect_duration.observe(snapshot.duration_s);
         self.collect_passes
-            .with_label_values(&[if ok { "ok" } else { "error" }])
+            .with_label_values(&[if snapshot.ok { "ok" } else { "error" }])
             .inc();
+        self.sources.set(snapshot.sources as i64);
+        self.runs
+            .with_label_values(&["seen"])
+            .inc_by(snapshot.runs_seen);
+        self.runs
+            .with_label_values(&["trusted"])
+            .inc_by(snapshot.runs_trusted);
+        self.artifacts_discovered
+            .with_label_values(&["seen"])
+            .inc_by(snapshot.artifacts_seen);
+        self.artifacts_discovered
+            .with_label_values(&["matched"])
+            .inc_by(snapshot.artifacts_matched);
+        self.collect_errors
+            .with_label_values(&["github"])
+            .inc_by(snapshot.github_errors);
+        self.collect_errors
+            .with_label_values(&["ingest"])
+            .inc_by(snapshot.ingest_errors);
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs() as i64)
