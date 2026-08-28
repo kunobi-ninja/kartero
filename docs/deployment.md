@@ -3,9 +3,9 @@
 The chart is published as an OCI artifact:
 
 ```bash
-helm show values oci://registry-1.docker.io/zondax/kartero --version 0.2.0
+helm show values oci://registry-1.docker.io/zondax/kartero --version 0.3.0
 helm install kartero oci://registry-1.docker.io/zondax/kartero \
-  --version 0.2.0 --namespace signoz
+  --version 0.3.0 --namespace signoz
 ```
 
 Set at least the GitHub owner, repository, workflows, existing Secret, OTLP

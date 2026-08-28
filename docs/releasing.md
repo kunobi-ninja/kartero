@@ -11,7 +11,7 @@ Update `Cargo.toml`, `packages/cli/package.json`, and
 `charts/kartero/Chart.yaml` together. Run:
 
 ```bash
-./scripts/check-version-consistency.sh v0.2.0
+./scripts/check-version-consistency.sh v0.3.0
 ```
 
 The release workflow accepts tags whose commit is reachable from `main`. It

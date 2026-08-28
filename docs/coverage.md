@@ -13,7 +13,7 @@ Generate `coverage-summary.json` with Jest, Vitest, or nyc, then add:
 ```yaml
 - name: Build coverage artifact
   if: always()
-  run: npx --yes @kunobi/kartero@0.2.0 coverage \
+  run: npx --yes @kunobi/kartero@0.3.0 coverage \
     --input coverage/coverage-summary.json \
     --format istanbul \
     --output telemetry-coverage
@@ -38,7 +38,7 @@ Produce LLVM's JSON export, then convert it:
 
 - name: Build coverage artifact
   if: always()
-  run: npx --yes @kunobi/kartero@0.2.0 coverage \
+  run: npx --yes @kunobi/kartero@0.3.0 coverage \
     --input coverage.json \
     --format llvm-cov-json \
     --output telemetry-coverage
@@ -59,7 +59,7 @@ LCOV works for any producer that writes standard `SF`, `DA`, `FNDA`, and `BRDA`
 records:
 
 ```bash
-npx --yes @kunobi/kartero@0.2.0 coverage \
+npx --yes @kunobi/kartero@0.3.0 coverage \
   --input coverage/lcov.info \
   --format lcov \
   --language typescript \

@@ -6,4 +6,5 @@ export {
   type CoverageKind,
   type CoverageSnapshot,
 } from './coverage.js'
+export { buildGaugeOtlp, parseAttribute, type GaugeOptions } from './gauge.js'
 export { validateArtifactDirectory } from './validate.js'
