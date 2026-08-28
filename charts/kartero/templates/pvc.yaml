@@ -1,0 +1,18 @@
+{{- if and .Values.ledger.persistence.enabled (eq .Values.ledger.persistence.type "pvc") }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "kartero.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kartero.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    {{- toYaml .Values.ledger.persistence.accessModes | nindent 4 }}
+  resources:
+    requests:
+      storage: {{ .Values.ledger.persistence.size | quote }}
+  {{- if .Values.ledger.persistence.storageClassName }}
+  storageClassName: {{ .Values.ledger.persistence.storageClassName | quote }}
+  {{- end }}
+{{- end }}

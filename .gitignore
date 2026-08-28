@@ -1,0 +1,6 @@
+# Rust
+/target
+
+# Local working documents — design specs, plans, scratch notes.
+# Kept next to the code for convenience, never published.
+docs/superpowers/

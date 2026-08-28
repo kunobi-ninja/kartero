@@ -1,0 +1,9 @@
+Kartero is collecting GitHub artifacts named {{ .Values.github.artifactPrefix }}*
+from {{ .Values.github.owner }}/{{ .Values.github.repo }} and POSTing OTLP/HTTP
+to {{ .Values.otlp.endpoint }}.
+
+{{- if not .Values.github.existingSecret }}
+
+No github.existingSecret is set. Collect will 401 until a fine-grained PAT
+with Actions: read is mounted.
+{{- end }}

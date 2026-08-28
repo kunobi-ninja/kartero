@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "replicaCount": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "image": {
+      "type": "object",
+      "properties": {
+        "repository": { "type": "string", "minLength": 1 },
+        "tag": { "type": "string" },
+        "pullPolicy": {
+          "type": "string",
+          "enum": ["Always", "IfNotPresent", "Never"]
+        }
+      },
+      "required": ["repository", "pullPolicy"]
+    },
+    "github": {
+      "type": "object",
+      "properties": {
+        "owner": { "type": "string", "minLength": 1 },
+        "repo": { "type": "string", "minLength": 1 },
+        "workflow": { "type": "string", "minLength": 1 },
+        "artifactPrefix": { "type": "string", "minLength": 1 },
+        "existingSecret": { "type": "string" },
+        "existingSecretKey": { "type": "string" }
+      },
+      "required": ["owner", "repo", "workflow", "artifactPrefix"]
+    },
+    "otlp": {
+      "type": "object",
+      "properties": {
+        "endpoint": { "type": "string", "minLength": 1 }
+      },
+      "required": ["endpoint"]
+    },
+    "interval": { "type": "string", "minLength": 1 },
+    "ledger": {
+      "type": "object",
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "persistence": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "type": { "type": "string", "enum": ["ephemeral", "pvc"] },
+            "mountPath": { "type": "string", "minLength": 1 },
+            "size": { "type": "string", "minLength": 1 }
+          },
+          "required": ["enabled", "type", "mountPath", "size"]
+        }
+      }
+    },
+    "service": {
+      "type": "object",
+      "properties": {
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+      }
+    },
+    "signoz": {
+      "type": "object",
+      "properties": {
+        "scrape": { "type": "boolean" },
+        "path": { "type": "string" }
+      }
+    }
+  }
+}

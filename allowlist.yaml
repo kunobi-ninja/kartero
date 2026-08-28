@@ -1,0 +1,37 @@
+# Reviewed metric and attribute registry. Unknown names are dropped, never
+# forwarded. Adding a series means adding a line here.
+metrics:
+  - kache.bench.build.duration
+  - kache.bench.compile.time_saved
+  - kache.bench.compile.units
+  - kache.bench.cache.hit_rate
+  - kache.bench.cache.weighted_hit_rate
+  - kache.bench.leak_warnings
+  - kache.bench.speedup
+  - kache.bench.cache.size
+  - kache.bench.objdir.size
+  - kache.bench.disk.consumed
+  - kache.bench.key_stability
+  - kache.bench.verdict.ok
+
+attributes:
+  - kache.telemetry.schema_version
+  - kache.bench.git_ref
+  - kache.bench.project
+  - kache.bench.cache_tool
+  - kache.bench.phase
+  - kache.bench.result
+  - cicd.pipeline.name
+  - vcs.repository.url.full
+
+projects:
+  - bench-firefox
+  - bench-firefox-windows
+  - bench-firefox-sccache
+  - bench-firefox-pull
+  - bench-firefox-pull-windows
+  - bench-substrate
+  - bench-surrealdb
+  - bench-lance
+  - bench-opendal
+  - bench-llvm

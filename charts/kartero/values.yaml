@@ -1,0 +1,90 @@
+nameOverride: ""
+fullnameOverride: ""
+
+# Single replica: the ledger SQLite file is single-writer. The chart forces
+# Recreate when persistence is a PVC, same reason as kache-service.
+replicaCount: 1
+
+image:
+  repository: zondax/kartero
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+logLevel: "kartero=info"
+
+github:
+  owner: kunobi-ninja
+  repo: kache
+  workflow: bench.yml
+  trustedBranch: main
+  artifactPrefix: telemetry-otlp-v1
+  # Fine-grained PAT with Actions: read (and Metadata: read, which GitHub
+  # attaches to every fine-grained token). Chart does not create the Secret.
+  existingSecret: ""
+  existingSecretKey: token
+
+otlp:
+  # In-cluster SigNoz collector. Override per environment.
+  endpoint: http://signoz-otel-collector.signoz.svc.cluster.local:4318
+
+interval: 1h
+
+ledger:
+  path: /var/lib/kartero/ledger.sqlite
+  persistence:
+    enabled: true
+    type: pvc
+    mountPath: /var/lib/kartero
+    size: 1Gi
+    storageClassName: ""
+    accessModes:
+      - ReadWriteOnce
+
+allowlist:
+  mountPath: /etc/kartero
+
+service:
+  type: ClusterIP
+  port: 8080
+  annotations: {}
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  fsGroupChangePolicy: OnRootMismatch
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 250m
+    memory: 128Mi
+
+# Own telemetry reaches SigNoz two ways: scrape of /metrics (these
+# annotations) and an OTLP/HTTP POST of kartero.collect.* gauges to
+# otlp.endpoint after every collect pass. Logs are JSON on stdout so the
+# cluster's signoz-agents log collection picks them up.
+signoz:
+  scrape: true
+  path: /metrics
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

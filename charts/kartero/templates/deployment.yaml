@@ -1,0 +1,137 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "kartero.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kartero.labels" . | nindent 4 }}
+spec:
+{{- if eq .Values.ledger.persistence.type "pvc" }}
+{{- if gt (int .Values.replicaCount) 1 }}
+{{- fail "ledger.persistence.type=pvc is single-writer: replicaCount must be 1" }}
+{{- end }}
+{{- end }}
+  replicas: {{ .Values.replicaCount }}
+{{- if eq .Values.ledger.persistence.type "pvc" }}
+  strategy:
+    type: Recreate
+{{- end }}
+  selector:
+    matchLabels:
+      {{- include "kartero.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "kartero.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- if or .Values.signoz.scrape .Values.podAnnotations }}
+      annotations:
+        {{- if .Values.signoz.scrape }}
+        signoz.io/scrape: "true"
+        signoz.io/port: {{ .Values.signoz.port | default .Values.service.port | quote }}
+        signoz.io/path: {{ .Values.signoz.path | quote }}
+        {{- end }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- end }}
+    spec:
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: kartero
+          image: {{ include "kartero.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          args: ["run"]
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+              protocol: TCP
+          env:
+            - name: KARTERO_BIND
+              value: "0.0.0.0:{{ .Values.service.port }}"
+            - name: KARTERO_LOG
+              value: {{ .Values.logLevel | quote }}
+            - name: KARTERO_INTERVAL
+              value: {{ .Values.interval | quote }}
+            - name: KARTERO_GITHUB_OWNER
+              value: {{ .Values.github.owner | quote }}
+            - name: KARTERO_GITHUB_REPO
+              value: {{ .Values.github.repo | quote }}
+            - name: KARTERO_GITHUB_WORKFLOW
+              value: {{ .Values.github.workflow | quote }}
+            - name: KARTERO_TRUSTED_BRANCH
+              value: {{ .Values.github.trustedBranch | quote }}
+            - name: KARTERO_ARTIFACT_PREFIX
+              value: {{ .Values.github.artifactPrefix | quote }}
+            - name: KARTERO_OTLP_ENDPOINT
+              value: {{ .Values.otlp.endpoint | quote }}
+            - name: KARTERO_ALLOWLIST
+              value: {{ printf "%s/allowlist.yaml" .Values.allowlist.mountPath | quote }}
+            - name: KARTERO_LEDGER
+              value: {{ .Values.ledger.path | quote }}
+            {{- if .Values.github.existingSecret }}
+            - name: KARTERO_GITHUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.github.existingSecret | quote }}
+                  key: {{ .Values.github.existingSecretKey | quote }}
+            {{- end }}
+          volumeMounts:
+            - name: allowlist
+              mountPath: {{ .Values.allowlist.mountPath | quote }}
+              readOnly: true
+            {{- if .Values.ledger.persistence.enabled }}
+            - name: ledger
+              mountPath: {{ .Values.ledger.persistence.mountPath | quote }}
+            {{- end }}
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: allowlist
+          configMap:
+            name: {{ include "kartero.fullname" . }}-allowlist
+        {{- if .Values.ledger.persistence.enabled }}
+        - name: ledger
+          {{- if eq .Values.ledger.persistence.type "ephemeral" }}
+          emptyDir: {}
+          {{- else if eq .Values.ledger.persistence.type "pvc" }}
+          persistentVolumeClaim:
+            claimName: {{ include "kartero.fullname" . }}
+          {{- else }}
+          {{- fail "ledger.persistence.type must be 'ephemeral' or 'pvc'" }}
+          {{- end }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
