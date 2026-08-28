@@ -4,13 +4,14 @@ Pulls OTLP JSON that CI already wrote, and delivers it to an OTLP/HTTP
 backend. It does not produce telemetry, convert formats, or hold backend
 credentials in GitHub Actions.
 
-Nightly kache benches upload a `telemetry-otlp-v1-*` artifact. Kartero,
-running in the cluster, lists those artifacts with a read-only GitHub
-token, validates the zip, drops anything outside a reviewed allowlist,
-adds a small `cicd.*` / `vcs.*` envelope, and POSTs the request body.
+Nightly kache benches and trusted `main` CI runs upload
+`telemetry-otlp-v1-*` artifacts. Kartero lists `bench.yml` and `ci.yml`
+with a read-only GitHub token. It accepts scheduled runs and `main` pushes,
+rejects pull-request telemetry, validates each zip, applies the reviewed
+allowlist, adds a small `cicd.*` / `vcs.*` envelope, and POSTs the request.
 
 ```text
-bench job                         cluster
+bench / main CI job               cluster
   └─ metrics.otlp.json             └─ kartero (Deployment)
        └─ upload-artifact               ├─ Actions: read PAT
                                         ├─ allowlist + ledger

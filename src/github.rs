@@ -32,11 +32,7 @@ pub struct GitHub {
 }
 
 pub fn is_trusted(event: &str, head_branch: &str, trusted_branch: &str) -> bool {
-    match event {
-        "schedule" => true,
-        "workflow_dispatch" => head_branch == trusted_branch,
-        _ => false,
-    }
+    matches!(event, "schedule" | "workflow_dispatch" | "push") && head_branch == trusted_branch
 }
 
 impl GitHub {
@@ -71,33 +67,34 @@ impl GitHub {
     }
 
     pub async fn list_completed_runs(&self) -> Result<Vec<WorkflowRun>> {
-        let url = format!(
-            "https://api.github.com/repos/{}/{}/actions/workflows/{}/runs?status=completed&per_page=30",
-            self.config.owner, self.config.repo, self.config.workflow
-        );
-        let body: RunsResponse = self
-            .client
-            .get(url)
-            .send()
-            .await?
-            .error_for_status()?
-            .json()
-            .await
-            .context("listing workflow runs")?;
-        Ok(body
-            .workflow_runs
-            .into_iter()
-            .map(|run| WorkflowRun {
+        let mut completed = Vec::new();
+        for workflow in &self.config.workflows {
+            let url = format!(
+                "https://api.github.com/repos/{}/{}/actions/workflows/{workflow}/runs?status=completed&per_page=30",
+                self.config.owner, self.config.repo
+            );
+            let body: RunsResponse = self
+                .client
+                .get(url)
+                .send()
+                .await?
+                .error_for_status()?
+                .json()
+                .await
+                .with_context(|| format!("listing workflow runs for {workflow}"))?;
+            completed.extend(body.workflow_runs.into_iter().map(|run| WorkflowRun {
                 repo_id: run.repository.id,
                 run_id: run.id,
                 attempt: run.run_attempt,
                 event: run.event,
                 head_branch: run.head_branch,
                 workflow_id: run.workflow_id,
-                workflow_name: run.name.unwrap_or_else(|| "Bench".into()),
+                workflow_name: run.name.unwrap_or_else(|| workflow.clone()),
                 conclusion: run.conclusion,
-            })
-            .collect())
+            }));
+        }
+        completed.sort_unstable_by_key(|run| std::cmp::Reverse(run.run_id));
+        Ok(completed)
     }
 
     pub async fn list_artifacts(&self, run_id: i64) -> Result<Vec<ArtifactRef>> {
@@ -199,14 +196,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn schedule_on_any_branch_is_trusted() {
-        assert!(is_trusted("schedule", "whatever", "main"));
+    fn trusted_events_require_main() {
+        for event in ["schedule", "workflow_dispatch", "push"] {
+            assert!(is_trusted(event, "main", "main"));
+            assert!(!is_trusted(event, "feat/foo", "main"));
+        }
     }
 
     #[test]
-    fn dispatch_is_trusted_only_on_main() {
-        assert!(is_trusted("workflow_dispatch", "main", "main"));
-        assert!(!is_trusted("workflow_dispatch", "feat/foo", "main"));
+    fn pull_requests_are_never_trusted() {
         assert!(!is_trusted("pull_request", "main", "main"));
     }
 }

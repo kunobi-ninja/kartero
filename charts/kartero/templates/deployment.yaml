@@ -67,8 +67,8 @@ spec:
               value: {{ .Values.github.owner | quote }}
             - name: KARTERO_GITHUB_REPO
               value: {{ .Values.github.repo | quote }}
-            - name: KARTERO_GITHUB_WORKFLOW
-              value: {{ .Values.github.workflow | quote }}
+            - name: KARTERO_GITHUB_WORKFLOWS
+              value: {{ join "," .Values.github.workflows | quote }}
             - name: KARTERO_TRUSTED_BRANCH
               value: {{ .Values.github.trustedBranch | quote }}
             - name: KARTERO_ARTIFACT_PREFIX

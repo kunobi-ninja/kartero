@@ -102,13 +102,14 @@ fn filter_scope_metrics(
             let name = metric
                 .get("name")
                 .and_then(Value::as_str)
-                .unwrap_or_default();
-            if !allowlist.allows_metric(name) {
+                .unwrap_or_default()
+                .to_string();
+            if !allowlist.allows_metric(&name) {
                 stats.metrics_dropped += 1;
                 continue;
             }
             let mut metric = metric;
-            if !filter_points(&mut metric, allowlist, stats)? {
+            if !filter_points(&mut metric, &name, allowlist, stats)? {
                 stats.metrics_dropped += 1;
                 continue;
             }
@@ -122,6 +123,7 @@ fn filter_scope_metrics(
 
 fn filter_points(
     metric: &mut Value,
+    metric_name: &str,
     allowlist: &Allowlist,
     stats: &mut FilterStats,
 ) -> Result<bool> {
@@ -136,7 +138,7 @@ fn filter_points(
     }
     let mut kept = Vec::new();
     for mut point in points.drain(..) {
-        if !retain_point(&mut point, allowlist)? {
+        if !retain_point(&mut point, metric_name, allowlist)? {
             stats.points_dropped += 1;
             continue;
         }
@@ -147,7 +149,7 @@ fn filter_points(
     Ok(!empty)
 }
 
-fn retain_point(point: &mut Value, allowlist: &Allowlist) -> Result<bool> {
+fn retain_point(point: &mut Value, metric_name: &str, allowlist: &Allowlist) -> Result<bool> {
     let Some(attrs) = point.get_mut("attributes").and_then(Value::as_array_mut) else {
         return Ok(false);
     };
@@ -175,7 +177,11 @@ fn retain_point(point: &mut Value, allowlist: &Allowlist) -> Result<bool> {
         }
         true
     });
-    Ok(project_count == 1 && project.is_some_and(|name| allowlist.allows_project(&name)))
+    if metric_name.starts_with("kache.bench.") {
+        Ok(project_count == 1 && project.is_some_and(|name| allowlist.allows_project(&name)))
+    } else {
+        Ok(project_count == 0)
+    }
 }
 
 fn str_attr(key: &str, value: &str) -> Value {
@@ -193,6 +199,7 @@ mod tests {
 metrics:
   - kache.bench.speedup
   - kache.bench.surprise
+  - kache.ci.coverage.lines
 attributes:
   - kache.bench.project
   - kache.bench.cache_tool
@@ -308,6 +315,30 @@ projects:
                 .unwrap()
                 .len(),
             1
+        );
+    }
+
+    #[test]
+    fn accepts_allowlisted_ci_metric_without_bench_project() {
+        let body = json!({
+            "resourceMetrics": [{
+                "scopeMetrics": [{
+                    "metrics": [{
+                        "name": "kache.ci.coverage.lines",
+                        "gauge": {"dataPoints": [{"asDouble": 89.5, "attributes": []}]}
+                    }]
+                }]
+            }]
+        });
+
+        let (out, stats) =
+            prepare(&serde_json::to_vec(&body).unwrap(), &list(), &envelope()).unwrap();
+        let out: Value = serde_json::from_slice(&out).unwrap();
+        assert_eq!(stats.metrics_kept, 1);
+        assert_eq!(stats.points_dropped, 0);
+        assert_eq!(
+            out["resourceMetrics"][0]["scopeMetrics"][0]["metrics"][0]["name"],
+            "kache.ci.coverage.lines"
         );
     }
 }

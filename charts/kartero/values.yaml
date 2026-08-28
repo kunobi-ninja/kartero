@@ -17,7 +17,9 @@ logLevel: "kartero=info"
 github:
   owner: kunobi-ninja
   repo: kache
-  workflow: bench.yml
+  workflows:
+    - bench.yml
+    - ci.yml
   trustedBranch: main
   artifactPrefix: telemetry-otlp-v1
   # Fine-grained PAT with Actions: read (and Metadata: read, which GitHub

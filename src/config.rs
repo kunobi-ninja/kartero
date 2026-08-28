@@ -19,7 +19,7 @@ pub struct GitHubConfig {
     pub token: String,
     pub owner: String,
     pub repo: String,
-    pub workflow: String,
+    pub workflows: Vec<String>,
     pub trusted_branch: String,
 }
 
@@ -44,8 +44,8 @@ struct FileGitHub {
     token_file: Option<PathBuf>,
     owner: String,
     repo: String,
-    #[serde(default = "default_workflow")]
-    workflow: String,
+    #[serde(default = "default_workflows")]
+    workflows: Vec<String>,
     #[serde(default = "default_branch")]
     trusted_branch: String,
 }
@@ -64,8 +64,8 @@ fn default_interval() -> String {
 fn default_prefix() -> String {
     "telemetry-otlp-v1".into()
 }
-fn default_workflow() -> String {
-    "bench.yml".into()
+fn default_workflows() -> Vec<String> {
+    vec!["bench.yml".into(), "ci.yml".into()]
 }
 fn default_branch() -> String {
     "main".into()
@@ -93,8 +93,10 @@ impl Config {
                 owner: std::env::var("KARTERO_GITHUB_OWNER")
                     .unwrap_or_else(|_| "kunobi-ninja".into()),
                 repo: std::env::var("KARTERO_GITHUB_REPO").unwrap_or_else(|_| "kache".into()),
-                workflow: std::env::var("KARTERO_GITHUB_WORKFLOW")
-                    .unwrap_or_else(|_| default_workflow()),
+                workflows: parse_workflows(
+                    &std::env::var("KARTERO_GITHUB_WORKFLOWS")
+                        .unwrap_or_else(|_| default_workflows().join(",")),
+                )?,
                 trusted_branch: std::env::var("KARTERO_TRUSTED_BRANCH")
                     .unwrap_or_else(|_| default_branch()),
             },
@@ -134,7 +136,7 @@ impl Config {
                 token,
                 owner: file.github.owner,
                 repo: file.github.repo,
-                workflow: file.github.workflow,
+                workflows: validate_workflows(file.github.workflows)?,
                 trusted_branch: file.github.trusted_branch,
             },
             otlp_endpoint: file.otlp.endpoint,
@@ -168,6 +170,17 @@ fn parse_duration(spec: &str) -> Result<Duration> {
     Ok(duration)
 }
 
+fn parse_workflows(spec: &str) -> Result<Vec<String>> {
+    validate_workflows(spec.split(',').map(str::trim).map(str::to_string).collect())
+}
+
+fn validate_workflows(workflows: Vec<String>) -> Result<Vec<String>> {
+    if workflows.is_empty() || workflows.iter().any(String::is_empty) {
+        bail!("at least one non-empty GitHub workflow is required");
+    }
+    Ok(workflows)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -177,5 +190,15 @@ mod tests {
         assert_eq!(parse_duration("1h").unwrap(), Duration::from_secs(3600));
         assert_eq!(parse_duration("30m").unwrap(), Duration::from_secs(1800));
         assert!(parse_duration("0s").is_err());
+    }
+
+    #[test]
+    fn parses_workflow_list() {
+        assert_eq!(
+            parse_workflows("bench.yml, ci.yml").unwrap(),
+            ["bench.yml", "ci.yml"]
+        );
+        assert!(parse_workflows("").is_err());
+        assert!(parse_workflows("bench.yml,").is_err());
     }
 }

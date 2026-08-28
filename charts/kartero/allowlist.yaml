@@ -13,6 +13,9 @@ metrics:
   - kache.bench.disk.consumed
   - kache.bench.key_stability
   - kache.bench.verdict.ok
+  - kache.ci.coverage.lines
+  - kache.ci.coverage.lines.covered
+  - kache.ci.coverage.lines.total
 
 attributes:
   - kache.telemetry.schema_version
