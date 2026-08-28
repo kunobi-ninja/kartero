@@ -46,12 +46,6 @@ else
   (cd "$placeholder" && npm publish --access public --tag bootstrap)
 fi
 
-latest_version="$(npm dist-tag ls "$package" | awk -F': ' '$1 == "latest" { print $2 }')"
-if [[ "$latest_version" == '0.0.0-bootstrap.0' ]]; then
-  echo 'Removing the placeholder from the latest tag...'
-  npm dist-tag rm "$package" latest
-fi
-
 npm trust github "$package" \
   --repository "$repository" \
   --file "$workflow" \
