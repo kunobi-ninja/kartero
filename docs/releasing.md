@@ -25,10 +25,12 @@ once from a maintainer session with 2FA:
 ./scripts/bootstrap-npm.sh
 ```
 
-The script publishes `0.0.0-bootstrap.0` under the non-default `bootstrap` tag,
-opening npm's web login first when needed. It then authorizes `release.yml` with
-`npm publish` permission. Version `0.2.0` remains available for the first real
-release. The workflow does not use an `NPM_TOKEN` secret.
+The script publishes `0.0.0-bootstrap.0` under the `bootstrap` tag, opening
+npm's web login first when needed. npm also assigns its required `latest` tag
+to the only published version; the first real release replaces it. The script
+then authorizes `release.yml` with `npm publish` permission. Version `0.2.0`
+remains available for that release. The workflow does not use an `NPM_TOKEN`
+secret.
 
 Docker Hub publishing uses `DOCKERHUB_USER` and `DOCKERHUB_TOKEN`. The token
 needs write access to `zondax/kartero`.
