@@ -19,6 +19,32 @@ metrics:
   - ci.coverage.percent
   - ci.coverage.covered
   - ci.coverage.total
+  - kache.cache.store.size
+  - kache.cache.store.entries
+  - kache.cache.store.max
+  - kache.cache.uploads
+  - kache.cache.uploads.pending
+  - kache.cache.downloads
+  - kache.cache.downloads.active
+  - kache.cache.bytes
+  - kache.cache.s3.concurrency
+  - kache.cache.remote.degraded
+  - kache.cache.remote_checks
+  - kache.cache.negative_hits
+  - kache.cache.negative_entries
+  - kache.prefetch.downloads
+  - kache.prefetch.bytes
+  - kache.prefetch.keys_used
+  - kache.prefetch.keys_cancelled
+  - kache.prefetch.keys_over_budget
+  - kache.prefetch.plans
+  - kache.prefetch.list.requests
+  - kache.prefetch.list.failures
+  - kache.prefetch.pack.requests
+  - kache.prefetch.v3.requests
+  - kache.prefetch.cancelled
+  - kache.prefetch.last_plan.candidates
+  - kache.prefetch.last_plan.wall
 
 attributes:
   - kache.telemetry.schema_version
@@ -27,10 +53,18 @@ attributes:
   - kache.bench.cache_tool
   - kache.bench.phase
   - kache.bench.result
+  - kache.cache.remote
+  - kache.cache.scenario
+  - kache.cache.phase
+  - kache.cache.result
+  - kache.cache.direction
+  - kache.cache.limit
+  - kache.prefetch.kind
   - cicd.pipeline.name
   - vcs.repository.url.full
   - service.namespace
   - service.name
+  - service.version
   - deployment.environment
   - telemetry.plane
   - language
