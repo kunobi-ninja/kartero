@@ -19,13 +19,8 @@ pub struct Config {
 #[derive(Debug, Clone)]
 pub struct ArchiveConfig {
     pub artifact_prefix: String,
-    pub bucket: String,
-    pub key_prefix: String,
-    pub endpoint: String,
-    pub region: String,
+    pub dir: PathBuf,
     pub max_bytes: usize,
-    pub access_key_id: String,
-    pub secret_access_key: String,
 }
 
 #[derive(Debug, Clone)]
@@ -62,21 +57,9 @@ struct FileArchive {
     #[serde(default = "default_archive_prefix")]
     artifact_prefix: String,
     #[serde(default)]
-    bucket: String,
-    #[serde(default)]
-    key_prefix: String,
-    #[serde(default)]
-    endpoint: String,
-    #[serde(default = "default_archive_region")]
-    region: String,
+    dir: PathBuf,
     #[serde(default = "default_archive_max_bytes")]
     max_bytes: usize,
-    #[serde(default)]
-    access_key_id: String,
-    access_key_id_file: Option<PathBuf>,
-    #[serde(default)]
-    secret_access_key: String,
-    secret_access_key_file: Option<PathBuf>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -118,8 +101,8 @@ fn default_branch() -> String {
 fn default_archive_prefix() -> String {
     "bench".into()
 }
-fn default_archive_region() -> String {
-    "auto".into()
+fn default_archive_dir() -> PathBuf {
+    PathBuf::from("/var/lib/kartero-archive")
 }
 fn default_archive_max_bytes() -> usize {
     32 * 1024 * 1024
@@ -248,28 +231,16 @@ fn archive_from_env() -> Result<Option<ArchiveConfig>> {
     if !env_flag("KARTERO_ARCHIVE") {
         return Ok(None);
     }
-    let access_key_id = read_secret(
-        "KARTERO_ARCHIVE_ACCESS_KEY_ID_FILE",
-        "KARTERO_ARCHIVE_ACCESS_KEY_ID",
-    )?;
-    let secret_access_key = read_secret(
-        "KARTERO_ARCHIVE_SECRET_ACCESS_KEY_FILE",
-        "KARTERO_ARCHIVE_SECRET_ACCESS_KEY",
-    )?;
     Ok(Some(require_archive(ArchiveConfig {
         artifact_prefix: std::env::var("KARTERO_ARCHIVE_ARTIFACT_PREFIX")
             .unwrap_or_else(|_| default_archive_prefix()),
-        bucket: std::env::var("KARTERO_ARCHIVE_BUCKET").unwrap_or_default(),
-        key_prefix: std::env::var("KARTERO_ARCHIVE_KEY_PREFIX").unwrap_or_default(),
-        endpoint: std::env::var("KARTERO_ARCHIVE_ENDPOINT").unwrap_or_default(),
-        region: std::env::var("KARTERO_ARCHIVE_REGION")
-            .unwrap_or_else(|_| default_archive_region()),
+        dir: std::env::var("KARTERO_ARCHIVE_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| default_archive_dir()),
         max_bytes: parse_max_bytes(
             &std::env::var("KARTERO_ARCHIVE_MAX_BYTES")
                 .unwrap_or_else(|_| default_archive_max_bytes().to_string()),
         )?,
-        access_key_id,
-        secret_access_key,
     })?))
 }
 
@@ -280,43 +251,20 @@ fn archive_from_file(file: Option<FileArchive>) -> Result<Option<ArchiveConfig>>
     if !file.enabled {
         return Ok(None);
     }
-    let access_key_id = if let Some(path) = file.access_key_id_file {
-        std::fs::read_to_string(&path)
-            .with_context(|| format!("reading archive access key from {}", path.display()))?
-            .trim()
-            .to_string()
-    } else {
-        file.access_key_id
-    };
-    let secret_access_key = if let Some(path) = file.secret_access_key_file {
-        std::fs::read_to_string(&path)
-            .with_context(|| format!("reading archive secret from {}", path.display()))?
-            .trim()
-            .to_string()
-    } else {
-        file.secret_access_key
-    };
     Ok(Some(require_archive(ArchiveConfig {
         artifact_prefix: file.artifact_prefix,
-        bucket: file.bucket,
-        key_prefix: file.key_prefix,
-        endpoint: file.endpoint,
-        region: file.region,
+        dir: if file.dir.as_os_str().is_empty() {
+            default_archive_dir()
+        } else {
+            file.dir
+        },
         max_bytes: file.max_bytes,
-        access_key_id,
-        secret_access_key,
     })?))
 }
 
 fn require_archive(config: ArchiveConfig) -> Result<ArchiveConfig> {
-    if config.bucket.trim().is_empty() {
-        bail!("archive.bucket / KARTERO_ARCHIVE_BUCKET is required when archive is enabled");
-    }
-    if config.endpoint.trim().is_empty() {
-        bail!("archive.endpoint / KARTERO_ARCHIVE_ENDPOINT is required when archive is enabled");
-    }
-    if config.access_key_id.trim().is_empty() || config.secret_access_key.trim().is_empty() {
-        bail!("archive access key and secret are required when archive is enabled");
+    if config.dir.as_os_str().is_empty() {
+        bail!("archive.dir / KARTERO_ARCHIVE_DIR is required when archive is enabled");
     }
     if config.artifact_prefix.trim().is_empty() {
         bail!("archive artifact prefix must be non-empty");
@@ -326,17 +274,8 @@ fn require_archive(config: ArchiveConfig) -> Result<ArchiveConfig> {
     }
     Ok(ArchiveConfig {
         artifact_prefix: config.artifact_prefix.trim().to_string(),
-        bucket: config.bucket.trim().to_string(),
-        key_prefix: config.key_prefix.trim_matches('/').to_string(),
-        endpoint: config.endpoint.trim_end_matches('/').to_string(),
-        region: if config.region.trim().is_empty() {
-            default_archive_region()
-        } else {
-            config.region.trim().to_string()
-        },
+        dir: config.dir,
         max_bytes: config.max_bytes,
-        access_key_id: config.access_key_id.trim().to_string(),
-        secret_access_key: config.secret_access_key.trim().to_string(),
     })
 }
 
@@ -349,16 +288,6 @@ fn env_flag(name: &str) -> bool {
             )
         })
         .unwrap_or(false)
-}
-
-fn read_secret(file_var: &str, value_var: &str) -> Result<String> {
-    if let Ok(path) = std::env::var(file_var) {
-        return Ok(std::fs::read_to_string(&path)
-            .with_context(|| format!("reading {file_var} from {path}"))?
-            .trim()
-            .to_string());
-    }
-    Ok(std::env::var(value_var).unwrap_or_default())
 }
 
 fn parse_max_bytes(spec: &str) -> Result<usize> {
@@ -404,32 +333,20 @@ mod tests {
     }
 
     #[test]
-    fn archive_requires_bucket_endpoint_and_keys() {
+    fn archive_requires_a_directory_and_a_prefix() {
         let incomplete = ArchiveConfig {
             artifact_prefix: "bench".into(),
-            bucket: String::new(),
-            key_prefix: String::new(),
-            endpoint: "https://example.r2.cloudflarestorage.com".into(),
-            region: "auto".into(),
+            dir: PathBuf::new(),
             max_bytes: 32,
-            access_key_id: "id".into(),
-            secret_access_key: "secret".into(),
         };
         assert!(require_archive(incomplete).is_err());
-        let ready = ArchiveConfig {
+        let ready = require_archive(ArchiveConfig {
             artifact_prefix: " bench ".into(),
-            bucket: " kache-bench ".into(),
-            key_prefix: "/kache/bench/".into(),
-            endpoint: "https://example.r2.cloudflarestorage.com/".into(),
-            region: " auto ".into(),
+            dir: PathBuf::from("/var/lib/kartero-archive"),
             max_bytes: 1024,
-            access_key_id: " id ".into(),
-            secret_access_key: " secret ".into(),
-        };
-        let ready = require_archive(ready).unwrap();
-        assert_eq!(ready.bucket, "kache-bench");
-        assert_eq!(ready.key_prefix, "kache/bench");
-        assert_eq!(ready.endpoint, "https://example.r2.cloudflarestorage.com");
+        })
+        .unwrap();
         assert_eq!(ready.artifact_prefix, "bench");
+        assert_eq!(ready.dir, PathBuf::from("/var/lib/kartero-archive"));
     }
 }

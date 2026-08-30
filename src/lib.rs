@@ -5,7 +5,7 @@
 //! small CI envelope, and POSTs the request body to an OTLP/HTTP backend.
 //!
 //! An optional archive pass copies a different artifact prefix (kache benches:
-//! `bench-*`) to an S3-compatible bucket. It does not parse OTLP.
+//! `bench-*`) onto a local directory, typically a PVC. It does not parse OTLP.
 
 pub mod allowlist;
 pub mod archive;
@@ -17,7 +17,6 @@ pub mod http;
 pub mod ledger;
 pub mod metrics;
 pub mod otlp;
-pub mod s3;
 pub mod self_telemetry;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

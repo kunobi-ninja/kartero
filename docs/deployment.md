@@ -74,30 +74,27 @@ state after a reschedule and can import old artifacts again.
 ## Archive diagnostic artifacts
 
 Off by default. Turn it on in Helm; the running Deployment (`kartero run`) then
-copies matching GitHub artifacts on the same interval as collect. There is
-nothing to cron and no extra command to invoke in the cluster. The prefix for
-kache benches is `bench` (`bench-firefox`, not `telemetry-otlp-v1-*`).
+copies matching GitHub artifacts onto a volume on the same interval as collect.
+There is nothing to cron and no extra command to invoke in the cluster. The
+prefix for kache benches is `bench` (`bench-firefox`, not `telemetry-otlp-v1-*`).
 
-It does not replace GitHub's 30-day artifact retention until you enable it and
-point it at a bucket you own.
+Files land at `{path}/{owner}/{repo}/{run_id}/{attempt}/{artifact}.zip`. Give
+the archive PVC enough space for the nights you want to keep; Kartero does not
+prune it.
 
 ```yaml
 archive:
   enabled: true
   artifactPrefix: bench
-  bucket: kache-bench-archive
-  keyPrefix: kache/bench
-  endpoint: https://<accountid>.r2.cloudflarestorage.com
-  region: auto
   maxBytes: 33554432
-  existingSecret: kartero-archive
-  accessKeyIdKey: access-key-id
-  secretAccessKeyKey: secret-access-key
+  path: /var/lib/kartero-archive
+  persistence:
+    type: pvc
+    size: 50Gi
+    storageClassName: ceph-csi-rbd
+    accessModes:
+      - ReadWriteOnce
 ```
-
-The archive Secret is separate from the GitHub token. Objects land at
-`{keyPrefix}/{owner}/{repo}/{run_id}/{attempt}/{artifact}.zip`. Kartero does
-not serve or query that bucket.
 
 For a private image, set `image.repository`, `image.tag`, and
 `imagePullSecrets`. Cluster-level registry proxies do not change the chart's

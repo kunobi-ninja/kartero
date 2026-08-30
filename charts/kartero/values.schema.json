@@ -84,14 +84,21 @@
       "properties": {
         "enabled": { "type": "boolean" },
         "artifactPrefix": { "type": "string", "minLength": 1 },
-        "bucket": { "type": "string" },
-        "keyPrefix": { "type": "string" },
-        "endpoint": { "type": "string" },
-        "region": { "type": "string" },
         "maxBytes": { "type": "integer", "minimum": 1 },
-        "existingSecret": { "type": "string" },
-        "accessKeyIdKey": { "type": "string", "minLength": 1 },
-        "secretAccessKeyKey": { "type": "string", "minLength": 1 }
+        "path": { "type": "string", "minLength": 1 },
+        "persistence": {
+          "type": "object",
+          "properties": {
+            "type": { "type": "string", "enum": ["ephemeral", "pvc"] },
+            "size": { "type": "string", "minLength": 1 },
+            "storageClassName": { "type": "string" },
+            "accessModes": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "type": "string", "minLength": 1 }
+            }
+          }
+        }
       }
     }
   }

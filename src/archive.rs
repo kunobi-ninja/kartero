@@ -1,30 +1,19 @@
-//! Optional object-store copy of GitHub diagnostic artifacts.
+//! Optional on-disk copy of GitHub diagnostic artifacts.
 //!
 //! Independent of collect: its own prefix, size cap, ledger table, and
-//! failure domain. Disabled unless `Config.archive` is set. Does not
-//! parse OTLP or write to SigNoz.
+//! failure domain. Disabled unless `Config.archive` is set. Writes zip
+//! files under a configured directory (a cluster PVC). Does not parse
+//! OTLP, talk to object storage, or write to SigNoz.
 
 use crate::config::{ArchiveConfig, Config};
 use crate::github::{self, ArtifactRef, GitHub, WorkflowRun};
 use crate::ledger::{ArchiveKey, ArchiveStatus, Ledger};
 use crate::metrics::Metrics;
-use crate::s3::{S3Config, S3Store};
 use crate::self_telemetry::{self, ArchiveSnapshot};
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use tracing::{info, warn};
-
-#[async_trait::async_trait]
-trait BlobStore: Send + Sync {
-    async fn put(&self, key: &str, body: &[u8]) -> Result<()>;
-}
-
-#[async_trait::async_trait]
-impl BlobStore for S3Store {
-    async fn put(&self, key: &str, body: &[u8]) -> Result<()> {
-        S3Store::put(self, key, body).await
-    }
-}
 
 pub async fn archive_once(config: &Config) -> Result<()> {
     let Some(archive) = config.archive.as_ref() else {
@@ -61,26 +50,10 @@ async fn archive_inner(
     archive: &ArchiveConfig,
     snapshot: &mut ArchiveSnapshot,
 ) -> Result<()> {
+    std::fs::create_dir_all(&archive.dir)
+        .with_context(|| format!("creating archive dir {}", archive.dir.display()))?;
     let ledger = Ledger::open(&config.ledger_path)?;
     let github = GitHub::new(config.github.clone())?;
-    let store = S3Store::new(S3Config {
-        bucket: archive.bucket.clone(),
-        endpoint: archive.endpoint.clone(),
-        region: archive.region.clone(),
-        access_key_id: archive.access_key_id.clone(),
-        secret_access_key: archive.secret_access_key.clone(),
-    })?;
-    copy_matching(config, archive, &ledger, &github, &store, snapshot).await
-}
-
-async fn copy_matching(
-    config: &Config,
-    archive: &ArchiveConfig,
-    ledger: &Ledger,
-    github: &GitHub,
-    store: &dyn BlobStore,
-    snapshot: &mut ArchiveSnapshot,
-) -> Result<()> {
     let runs = match github.list_completed_runs().await {
         Ok(runs) => runs,
         Err(err) => {
@@ -111,10 +84,8 @@ async fn copy_matching(
                 continue;
             }
             snapshot.artifacts_matched += 1;
-            if let Err(err) = archive_one(
-                config, archive, ledger, github, store, snapshot, &run, &artifact,
-            )
-            .await
+            if let Err(err) =
+                archive_one(config, archive, &ledger, &github, snapshot, &run, &artifact).await
             {
                 warn!(
                     run_id = run.run_id,
@@ -145,7 +116,6 @@ async fn archive_one(
     archive: &ArchiveConfig,
     ledger: &Ledger,
     github: &GitHub,
-    store: &dyn BlobStore,
     snapshot: &mut ArchiveSnapshot,
     run: &WorkflowRun,
     artifact: &ArtifactRef,
@@ -178,50 +148,60 @@ async fn archive_one(
         return Ok(());
     }
 
-    let object_key = object_key(
-        &archive.key_prefix,
+    let relative = relative_path(
         &config.github.owner,
         &config.github.repo,
         run.run_id,
         run.attempt,
         &artifact.name,
     );
+    let dest = archive_dest(&archive.dir, &relative)?;
     let zip = github
         .download_zip_limited(artifact.id, archive.max_bytes)
         .await?;
-    store.put(&object_key, &zip).await?;
-    ledger.record_archive(&key, &object_key, ArchiveStatus::Archived)?;
+    write_zip(&dest, &zip)?;
+    ledger.record_archive(&key, &relative, ArchiveStatus::Archived)?;
     record_artifact(snapshot, "archived");
     info!(
         run_id = run.run_id,
         artifact = %artifact.name,
-        object = %object_key,
+        path = %dest.display(),
         bytes = zip.len(),
         "archived"
     );
     Ok(())
 }
 
-pub fn object_key(
-    prefix: &str,
+pub fn relative_path(
     owner: &str,
     repo: &str,
     run_id: i64,
     attempt: i64,
     artifact_name: &str,
 ) -> String {
-    let name = sanitize_artifact_name(artifact_name);
-    let mut parts = Vec::new();
-    let prefix = prefix.trim_matches('/');
-    if !prefix.is_empty() {
-        parts.push(prefix.to_string());
+    format!(
+        "{owner}/{repo}/{run_id}/{attempt}/{}.zip",
+        sanitize_artifact_name(artifact_name)
+    )
+}
+
+fn archive_dest(root: &Path, relative: &str) -> Result<PathBuf> {
+    let dest = root.join(relative);
+    if !dest.starts_with(root) {
+        bail!("archive path escaped root: {relative}");
     }
-    parts.push(owner.to_string());
-    parts.push(repo.to_string());
-    parts.push(run_id.to_string());
-    parts.push(attempt.to_string());
-    parts.push(format!("{name}.zip"));
-    parts.join("/")
+    Ok(dest)
+}
+
+fn write_zip(dest: &Path, bytes: &[u8]) -> Result<()> {
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating {}", parent.display()))?;
+    }
+    let tmp = dest.with_extension("zip.partial");
+    std::fs::write(&tmp, bytes).with_context(|| format!("writing {}", tmp.display()))?;
+    std::fs::rename(&tmp, dest).with_context(|| format!("renaming {}", dest.display()))?;
+    Ok(())
 }
 
 fn sanitize_artifact_name(name: &str) -> String {
@@ -273,22 +253,25 @@ mod tests {
     }
 
     #[test]
-    fn object_key_joins_prefix_and_sanitizes_the_artifact_name() {
+    fn relative_path_sanitizes_the_artifact_name() {
         assert_eq!(
-            object_key(
-                "kache/bench",
-                "kunobi-ninja",
-                "kache",
-                33286590263,
-                1,
-                "bench-firefox"
-            ),
-            "kache/bench/kunobi-ninja/kache/33286590263/1/bench-firefox.zip"
+            relative_path("kunobi-ninja", "kache", 33286590263, 1, "bench-firefox"),
+            "kunobi-ninja/kache/33286590263/1/bench-firefox.zip"
         );
         assert_eq!(
-            object_key("", "o", "r", 1, 1, "bench/../x y"),
+            relative_path("o", "r", 1, 1, "bench/../x y"),
             "o/r/1/1/bench_.._x_y.zip"
         );
+    }
+
+    #[test]
+    fn write_zip_is_atomic_and_stays_under_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let relative = relative_path("o", "r", 1, 1, "bench-firefox");
+        let dest = archive_dest(dir.path(), &relative).unwrap();
+        write_zip(&dest, b"zip-bytes").unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), b"zip-bytes");
+        assert!(!dest.with_extension("zip.partial").exists());
     }
 
     #[test]

@@ -15,7 +15,7 @@ enum Command {
     Run,
     /// One collect pass, then exit. For local debug; the Deployment uses `run`.
     Collect,
-    /// One archive pass, then exit. For local debug; production is Helm `archive.enabled`.
+    /// One archive pass, then exit. For local debug; production is Helm `archive.enabled` plus a volume.
     Archive,
 }
 

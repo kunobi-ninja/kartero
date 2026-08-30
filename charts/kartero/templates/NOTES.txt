@@ -4,12 +4,11 @@ to {{ .Values.otlp.endpoint }}.
 {{- if .Values.archive.enabled }}
 
 Archive is enabled: artifacts named {{ .Values.archive.artifactPrefix }}* are
-copied to s3://{{ .Values.archive.bucket }} (endpoint {{ .Values.archive.endpoint }}).
-This pass is independent of OTLP collect.
+copied to {{ .Values.archive.path }} on this pod. Independent of OTLP collect.
 {{- else }}
 
-Archive is off. Set archive.enabled and a bucket/endpoint/secret to copy
-diagnostic artifacts (for example kache bench-*) to object storage.
+Archive is off. Set archive.enabled to keep diagnostic artifacts (for example
+kache bench-*) on a PVC next to the collector.
 {{- end }}
 
 {{- if not .Values.github.existingSecret }}

@@ -166,7 +166,7 @@ impl Metrics {
         .expect("archive passes counter");
         let archive_duration = Histogram::with_opts(histogram_opts!(
             "kartero_archive_duration_seconds",
-            "Wall time of one archive pass, including GitHub download and object PUT.",
+            "Wall time of one archive pass, including GitHub download and disk write.",
             vec![0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0]
         ))
         .expect("archive duration");
