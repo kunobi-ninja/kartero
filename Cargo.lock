@@ -765,6 +765,7 @@ dependencies = [
  "clap",
  "prometheus",
  "reqwest",
+ "ring",
  "rusqlite",
  "rustls",
  "serde",

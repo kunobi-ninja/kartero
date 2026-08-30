@@ -11,10 +11,12 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Run the HTTP server and collect on an interval.
+    /// Run the HTTP server and collect (and archive, if configured) on an interval.
     Run,
     /// Collect once and exit.
     Collect,
+    /// Archive matching GitHub artifacts to object storage once and exit.
+    Archive,
 }
 
 #[tokio::main]
@@ -25,6 +27,7 @@ async fn main() -> Result<()> {
     match cli.command {
         Command::Run => kartero::http::serve(config).await,
         Command::Collect => kartero::collect::collect_once(&config).await,
+        Command::Archive => kartero::archive::archive_once(&config).await,
     }
 }
 

@@ -21,3 +21,9 @@ added.
 
 Kartero runs as a Deployment. One replica owns one SQLite ledger. The Helm chart
 uses a `Recreate` strategy with PVC storage to preserve that single-writer model.
+
+An optional **archive** pass is a sibling of collect, not part of it. When
+enabled, the same trusted GitHub runs are listed again and artifacts matching a
+different name prefix (kache diagnostic zips, `bench-*`) are copied to an
+S3-compatible bucket. Archive failures do not skip OTLP delivery. The PVC still
+only holds the ledger, not the zips.

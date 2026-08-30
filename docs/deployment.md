@@ -71,6 +71,32 @@ Adapt the store, item, and property names to the cluster's secret provider.
 The PVC is the normal production path. An ephemeral ledger forgets delivery
 state after a reschedule and can import old artifacts again.
 
+## Archive diagnostic artifacts
+
+Off by default. When `archive.enabled` is true, Kartero copies GitHub artifacts
+whose names match `archive.artifactPrefix` (kache benches: `bench`) to an
+S3-compatible bucket. This is a second pass on the same interval as collect. It
+does not replace GitHub's 30-day artifact retention until you turn it on and
+point it at a bucket you own.
+
+```yaml
+archive:
+  enabled: true
+  artifactPrefix: bench
+  bucket: kache-bench-archive
+  keyPrefix: kache/bench
+  endpoint: https://<accountid>.r2.cloudflarestorage.com
+  region: auto
+  maxBytes: 33554432
+  existingSecret: kartero-archive
+  accessKeyIdKey: access-key-id
+  secretAccessKeyKey: secret-access-key
+```
+
+The archive Secret is separate from the GitHub token. Objects land at
+`{keyPrefix}/{owner}/{repo}/{run_id}/{attempt}/{artifact}.zip`. Kartero does
+not serve or query that bucket.
+
 For a private image, set `image.repository`, `image.tag`, and
 `imagePullSecrets`. Cluster-level registry proxies do not change the chart's
 credential model.

@@ -30,6 +30,30 @@ pub struct DeliveryKey {
     pub schema_version: u32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArchiveStatus {
+    Archived,
+    Skipped,
+}
+
+impl ArchiveStatus {
+    fn as_str(self) -> &'static str {
+        match self {
+            ArchiveStatus::Archived => "archived",
+            ArchiveStatus::Skipped => "skipped",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ArchiveKey {
+    pub repo_id: i64,
+    pub run_id: i64,
+    pub attempt: i64,
+    pub artifact_id: i64,
+    pub digest: String,
+}
+
 pub struct Ledger {
     conn: Mutex<Connection>,
 }
@@ -53,6 +77,17 @@ impl Ledger {
                 status TEXT NOT NULL,
                 delivered_at TEXT NOT NULL,
                 PRIMARY KEY (repo_id, run_id, attempt, artifact_id, digest, schema_version)
+            );
+            CREATE TABLE IF NOT EXISTS archives (
+                repo_id INTEGER NOT NULL,
+                run_id INTEGER NOT NULL,
+                attempt INTEGER NOT NULL,
+                artifact_id INTEGER NOT NULL,
+                digest TEXT NOT NULL,
+                object_key TEXT NOT NULL,
+                status TEXT NOT NULL,
+                archived_at TEXT NOT NULL,
+                PRIMARY KEY (repo_id, run_id, attempt, artifact_id, digest)
             );",
         )?;
         Ok(Self {
@@ -77,6 +112,48 @@ impl Ledger {
             key.schema_version,
         ])?;
         Ok(exists)
+    }
+
+    pub fn archive_is_terminal(&self, key: &ArchiveKey) -> Result<bool> {
+        let conn = self.conn.lock().expect("ledger mutex");
+        let mut stmt = conn.prepare(
+            "SELECT 1 FROM archives
+             WHERE repo_id = ?1 AND run_id = ?2 AND attempt = ?3
+               AND artifact_id = ?4 AND digest = ?5
+               AND status IN ('archived', 'skipped')",
+        )?;
+        let exists = stmt.exists(rusqlite::params![
+            key.repo_id,
+            key.run_id,
+            key.attempt,
+            key.artifact_id,
+            key.digest,
+        ])?;
+        Ok(exists)
+    }
+
+    pub fn record_archive(
+        &self,
+        key: &ArchiveKey,
+        object_key: &str,
+        status: ArchiveStatus,
+    ) -> Result<()> {
+        let conn = self.conn.lock().expect("ledger mutex");
+        conn.execute(
+            "INSERT OR REPLACE INTO archives
+             (repo_id, run_id, attempt, artifact_id, digest, object_key, status, archived_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, datetime('now'))",
+            rusqlite::params![
+                key.repo_id,
+                key.run_id,
+                key.attempt,
+                key.artifact_id,
+                key.digest,
+                object_key,
+                status.as_str(),
+            ],
+        )?;
+        Ok(())
     }
 
     pub fn record(&self, key: &DeliveryKey, status: DeliveryStatus) -> Result<()> {
@@ -136,5 +213,33 @@ mod tests {
         assert!(ledger.is_terminal(&key).unwrap());
         ledger.record(&key, DeliveryStatus::Skipped).unwrap();
         assert!(ledger.is_terminal(&key).unwrap());
+    }
+
+    #[test]
+    fn archived_key_is_not_retried_and_is_separate_from_delivery() {
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = Ledger::open(&dir.path().join("ledger.sqlite")).unwrap();
+        let delivery = DeliveryKey {
+            repo_id: 1,
+            run_id: 2,
+            attempt: 1,
+            artifact_id: 9,
+            digest: "sha256:abc".into(),
+            schema_version: 1,
+        };
+        let archive = ArchiveKey {
+            repo_id: 1,
+            run_id: 2,
+            attempt: 1,
+            artifact_id: 9,
+            digest: "sha256:abc".into(),
+        };
+        ledger.record(&delivery, DeliveryStatus::Delivered).unwrap();
+        assert!(!ledger.archive_is_terminal(&archive).unwrap());
+        ledger
+            .record_archive(&archive, "kache/bench/9.zip", ArchiveStatus::Archived)
+            .unwrap();
+        assert!(ledger.archive_is_terminal(&archive).unwrap());
+        assert!(ledger.is_terminal(&delivery).unwrap());
     }
 }

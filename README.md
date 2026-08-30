@@ -68,6 +68,20 @@ Kartero stores delivery state in SQLite so a restart does not import the same
 artifact again. SigNoz is only the destination; it is not the deduplication
 store.
 
+```bash
+KARTERO_ARCHIVE=true \
+KARTERO_ARCHIVE_BUCKET=kache-bench-archive \
+KARTERO_ARCHIVE_ENDPOINT=https://<accountid>.r2.cloudflarestorage.com \
+KARTERO_ARCHIVE_ACCESS_KEY_ID=... \
+KARTERO_ARCHIVE_SECRET_ACCESS_KEY=... \
+  kartero archive
+```
+
+Archive is optional and separate from `kartero collect`. It copies GitHub
+artifacts whose names match `bench*` (configurable) to an S3-compatible bucket.
+`kartero run` still delivers OTLP if archive is off or if a PUT fails. See
+[Deploy Kartero](docs/deployment.md#archive-diagnostic-artifacts).
+
 For Kubernetes, install the OCI chart and supply the token through a Kubernetes
 Secret, commonly managed by External Secrets:
 

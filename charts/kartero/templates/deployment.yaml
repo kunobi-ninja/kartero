@@ -87,6 +87,37 @@ spec:
                   name: {{ required "github.existingSecret is required" .Values.github.existingSecret | quote }}
                   key: {{ required "github.existingSecretKey is required" .Values.github.existingSecretKey | quote }}
                   optional: false
+            {{- if .Values.archive.enabled }}
+            {{- if not .Values.archive.bucket }}{{ fail "archive.bucket is required when archive.enabled is true" }}{{ end }}
+            {{- if not .Values.archive.endpoint }}{{ fail "archive.endpoint is required when archive.enabled is true" }}{{ end }}
+            {{- if not .Values.archive.existingSecret }}{{ fail "archive.existingSecret is required when archive.enabled is true" }}{{ end }}
+            - name: KARTERO_ARCHIVE
+              value: "true"
+            - name: KARTERO_ARCHIVE_ARTIFACT_PREFIX
+              value: {{ .Values.archive.artifactPrefix | quote }}
+            - name: KARTERO_ARCHIVE_BUCKET
+              value: {{ .Values.archive.bucket | quote }}
+            - name: KARTERO_ARCHIVE_KEY_PREFIX
+              value: {{ .Values.archive.keyPrefix | quote }}
+            - name: KARTERO_ARCHIVE_ENDPOINT
+              value: {{ .Values.archive.endpoint | quote }}
+            - name: KARTERO_ARCHIVE_REGION
+              value: {{ .Values.archive.region | quote }}
+            - name: KARTERO_ARCHIVE_MAX_BYTES
+              value: {{ .Values.archive.maxBytes | quote }}
+            - name: KARTERO_ARCHIVE_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.archive.existingSecret | quote }}
+                  key: {{ .Values.archive.accessKeyIdKey | quote }}
+                  optional: false
+            - name: KARTERO_ARCHIVE_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.archive.existingSecret | quote }}
+                  key: {{ .Values.archive.secretAccessKeyKey | quote }}
+                  optional: false
+            {{- end }}
           volumeMounts:
             - name: allowlist
               mountPath: {{ .Values.allowlist.mountPath | quote }}

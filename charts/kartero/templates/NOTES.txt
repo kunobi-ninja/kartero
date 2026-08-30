@@ -1,6 +1,16 @@
 Kartero is collecting GitHub artifacts named {{ .Values.github.artifactPrefix }}*
 from {{ .Values.github.owner }}/{{ .Values.github.repo }} and POSTing OTLP/HTTP
 to {{ .Values.otlp.endpoint }}.
+{{- if .Values.archive.enabled }}
+
+Archive is enabled: artifacts named {{ .Values.archive.artifactPrefix }}* are
+copied to s3://{{ .Values.archive.bucket }} (endpoint {{ .Values.archive.endpoint }}).
+This pass is independent of OTLP collect.
+{{- else }}
+
+Archive is off. Set archive.enabled and a bucket/endpoint/secret to copy
+diagnostic artifacts (for example kache bench-*) to object storage.
+{{- end }}
 
 {{- if not .Values.github.existingSecret }}
 

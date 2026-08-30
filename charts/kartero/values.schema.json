@@ -78,6 +78,21 @@
         "scrape": { "type": "boolean" },
         "path": { "type": "string" }
       }
+    },
+    "archive": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "artifactPrefix": { "type": "string", "minLength": 1 },
+        "bucket": { "type": "string" },
+        "keyPrefix": { "type": "string" },
+        "endpoint": { "type": "string" },
+        "region": { "type": "string" },
+        "maxBytes": { "type": "integer", "minimum": 1 },
+        "existingSecret": { "type": "string" },
+        "accessKeyIdKey": { "type": "string", "minLength": 1 },
+        "secretAccessKeyKey": { "type": "string", "minLength": 1 }
+      }
     }
   }
 }

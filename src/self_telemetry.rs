@@ -2,7 +2,8 @@
 //! producer payloads to, so Signoz sees the collector even when scrape
 //! annotations are inert.
 //!
-//! Gauges for collect passes and process heartbeats. No OpenTelemetry SDK.
+//! Gauges for collect passes, archive passes, and process heartbeats. No
+//! OpenTelemetry SDK.
 
 use crate::VERSION;
 use anyhow::{Context, Result};
@@ -33,6 +34,32 @@ pub struct CollectSnapshot {
 pub struct ProcessSnapshot {
     pub start_time_unix_s: u64,
     pub uptime_s: f64,
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct ArchiveSnapshot {
+    pub duration_s: f64,
+    pub ok: bool,
+    pub runs_seen: u64,
+    pub runs_trusted: u64,
+    pub artifacts_seen: u64,
+    pub artifacts_matched: u64,
+    pub archived: u64,
+    pub skipped: u64,
+    pub retryable: u64,
+    pub github_errors: u64,
+    pub store_errors: u64,
+}
+
+impl ArchiveSnapshot {
+    pub fn inc_artifact(&mut self, outcome: &str) {
+        match outcome {
+            "archived" => self.archived += 1,
+            "skipped" => self.skipped += 1,
+            "retryable" => self.retryable += 1,
+            _ => {}
+        }
+    }
 }
 
 impl CollectSnapshot {
@@ -130,6 +157,59 @@ pub async fn post(
         endpoint,
         serialize(snapshot),
         "kartero self-telemetry",
+    )
+    .await
+}
+
+pub fn serialize_archive(snapshot: &ArchiveSnapshot) -> Value {
+    let time = now_unix_nano();
+    let run_attrs: Vec<Value> = Vec::new();
+    json!({
+        "resourceMetrics": [{
+            "resource": {
+                "attributes": [
+                    str_attr("service.name", "kartero"),
+                    str_attr("service.version", VERSION),
+                ]
+            },
+            "scopeMetrics": [{
+                "scope": { "name": "kartero", "version": VERSION },
+                "metrics": [
+                    gauge("kartero.archive.duration", "s", vec![as_double(snapshot.duration_s, &time, &run_attrs)]),
+                    gauge("kartero.archive.ok", "1", vec![as_int(u64::from(snapshot.ok), &time, &run_attrs)]),
+                    gauge("kartero.archive.runs", "{run}", vec![
+                        as_int(snapshot.runs_seen, &time, &[str_attr("kartero.run.state", "seen")]),
+                        as_int(snapshot.runs_trusted, &time, &[str_attr("kartero.run.state", "trusted")]),
+                    ]),
+                    gauge("kartero.archive.artifacts_discovered", "{artifact}", vec![
+                        as_int(snapshot.artifacts_seen, &time, &[str_attr("kartero.discovery.state", "seen")]),
+                        as_int(snapshot.artifacts_matched, &time, &[str_attr("kartero.discovery.state", "matched")]),
+                    ]),
+                    gauge("kartero.archive.artifacts", "{artifact}", vec![
+                        as_int(snapshot.archived, &time, &[str_attr("kartero.artifact.outcome", "archived")]),
+                        as_int(snapshot.skipped, &time, &[str_attr("kartero.artifact.outcome", "skipped")]),
+                        as_int(snapshot.retryable, &time, &[str_attr("kartero.artifact.outcome", "retryable")]),
+                    ]),
+                    gauge("kartero.archive.errors", "{error}", vec![
+                        as_int(snapshot.github_errors, &time, &[str_attr("kartero.error.component", "github")]),
+                        as_int(snapshot.store_errors, &time, &[str_attr("kartero.error.component", "store")]),
+                    ]),
+                ]
+            }]
+        }]
+    })
+}
+
+pub async fn post_archive(
+    client: &reqwest::Client,
+    endpoint: &str,
+    snapshot: &ArchiveSnapshot,
+) -> Result<()> {
+    post_body(
+        client,
+        endpoint,
+        serialize_archive(snapshot),
+        "kartero archive telemetry",
     )
     .await
 }
@@ -272,5 +352,33 @@ mod tests {
         assert_eq!(metrics[0]["gauge"]["dataPoints"][0]["asInt"], "1");
         assert_eq!(metrics[1]["gauge"]["dataPoints"][0]["asDouble"], 12.5);
         assert_eq!(metrics[2]["gauge"]["dataPoints"][0]["asInt"], "1700000000");
+    }
+
+    #[test]
+    fn archive_payload_is_separate_from_collect() {
+        let body = serialize_archive(&ArchiveSnapshot {
+            duration_s: 2.0,
+            ok: true,
+            runs_seen: 3,
+            runs_trusted: 1,
+            artifacts_seen: 8,
+            artifacts_matched: 2,
+            archived: 2,
+            skipped: 0,
+            retryable: 0,
+            github_errors: 0,
+            store_errors: 0,
+        });
+        let names: Vec<_> = body["resourceMetrics"][0]["scopeMetrics"][0]["metrics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m["name"].as_str().unwrap())
+            .collect();
+        assert!(names.contains(&"kartero.archive.duration"));
+        assert!(names.contains(&"kartero.archive.artifacts"));
+        let dumped = body.to_string();
+        assert!(!dumped.contains("kartero.collect."));
+        assert!(!dumped.contains("run_id"));
     }
 }
