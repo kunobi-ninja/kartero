@@ -73,10 +73,12 @@ state after a reschedule and can import old artifacts again.
 
 ## Archive diagnostic artifacts
 
-Off by default. When `archive.enabled` is true, Kartero copies GitHub artifacts
-whose names match `archive.artifactPrefix` (kache benches: `bench`) to an
-S3-compatible bucket. This is a second pass on the same interval as collect. It
-does not replace GitHub's 30-day artifact retention until you turn it on and
+Off by default. Turn it on in Helm; the running Deployment (`kartero run`) then
+copies matching GitHub artifacts on the same interval as collect. There is
+nothing to cron and no extra command to invoke in the cluster. The prefix for
+kache benches is `bench` (`bench-firefox`, not `telemetry-otlp-v1-*`).
+
+It does not replace GitHub's 30-day artifact retention until you enable it and
 point it at a bucket you own.
 
 ```yaml

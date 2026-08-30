@@ -11,11 +11,11 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Run the HTTP server and collect (and archive, if configured) on an interval.
+    /// In-cluster process: HTTP /metrics plus collect (and archive if configured).
     Run,
-    /// Collect once and exit.
+    /// One collect pass, then exit. For local debug; the Deployment uses `run`.
     Collect,
-    /// Archive matching GitHub artifacts to object storage once and exit.
+    /// One archive pass, then exit. For local debug; production is Helm `archive.enabled`.
     Archive,
 }
 
