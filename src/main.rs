@@ -11,10 +11,12 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Run the HTTP server and collect on an interval.
+    /// In-cluster process: HTTP /metrics plus collect (and archive if configured).
     Run,
-    /// Collect once and exit.
+    /// One collect pass, then exit. For local debug; the Deployment uses `run`.
     Collect,
+    /// One archive pass, then exit. For local debug; production is Helm `archive.enabled` plus a volume.
+    Archive,
 }
 
 #[tokio::main]
@@ -25,6 +27,7 @@ async fn main() -> Result<()> {
     match cli.command {
         Command::Run => kartero::http::serve(config).await,
         Command::Collect => kartero::collect::collect_once(&config).await,
+        Command::Archive => kartero::archive::archive_once(&config).await,
     }
 }
 

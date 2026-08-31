@@ -1,7 +1,7 @@
 use crate::allowlist::Allowlist;
 use crate::artifact::{self, MAX_ZIP_BYTES};
 use crate::config::Config;
-use crate::github::{ArtifactRef, GitHub, WorkflowRun};
+use crate::github::{self, ArtifactRef, GitHub, WorkflowRun};
 use crate::ledger::{DeliveryKey, DeliveryStatus, Ledger};
 use crate::metrics::Metrics;
 use crate::otlp::{self, Envelope};
@@ -78,7 +78,7 @@ async fn collect_inner(config: &Config, snapshot: &mut CollectSnapshot) -> Resul
         };
         snapshot.artifacts_seen += artifacts.len() as u64;
         for artifact in artifacts {
-            if !artifact_name_matches(&artifact.name, &config.artifact_prefix) {
+            if !github::artifact_name_matches(&artifact.name, &config.artifact_prefix) {
                 continue;
             }
             snapshot.artifacts_matched += 1;
@@ -103,13 +103,6 @@ async fn collect_inner(config: &Config, snapshot: &mut CollectSnapshot) -> Resul
         bail!("one or more artifact operations failed");
     }
     Ok(())
-}
-
-fn artifact_name_matches(name: &str, prefix: &str) -> bool {
-    name == prefix
-        || name
-            .strip_prefix(prefix)
-            .is_some_and(|rest| rest.starts_with('-'))
 }
 
 fn record_artifact(metrics: &Metrics, snapshot: &mut CollectSnapshot, outcome: &str) {
@@ -250,7 +243,7 @@ async fn ingest_one(
 
 #[cfg(test)]
 mod tests {
-    use super::artifact_name_matches;
+    use crate::github::artifact_name_matches;
 
     #[test]
     fn artifact_prefix_does_not_match_the_next_major_version() {

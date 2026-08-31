@@ -16,3 +16,22 @@ spec:
   storageClassName: {{ .Values.ledger.persistence.storageClassName | quote }}
   {{- end }}
 {{- end }}
+{{- if and .Values.archive.enabled (eq .Values.archive.persistence.type "pvc") }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "kartero.fullname" . }}-archive
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kartero.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    {{- toYaml .Values.archive.persistence.accessModes | nindent 4 }}
+  resources:
+    requests:
+      storage: {{ .Values.archive.persistence.size | quote }}
+  {{- if .Values.archive.persistence.storageClassName }}
+  storageClassName: {{ .Values.archive.persistence.storageClassName | quote }}
+  {{- end }}
+{{- end }}

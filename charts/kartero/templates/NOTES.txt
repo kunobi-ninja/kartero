@@ -1,6 +1,15 @@
 Kartero is collecting GitHub artifacts named {{ .Values.github.artifactPrefix }}*
 from {{ .Values.github.owner }}/{{ .Values.github.repo }} and POSTing OTLP/HTTP
 to {{ .Values.otlp.endpoint }}.
+{{- if .Values.archive.enabled }}
+
+Archive is enabled: artifacts named {{ .Values.archive.artifactPrefix }}* are
+copied to {{ .Values.archive.path }} on this pod. Independent of OTLP collect.
+{{- else }}
+
+Archive is off. Set archive.enabled to keep diagnostic artifacts (for example
+kache bench-*) on a PVC next to the collector.
+{{- end }}
 
 {{- if not .Values.github.existingSecret }}
 

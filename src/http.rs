@@ -39,6 +39,9 @@ pub async fn serve(config: Config) -> Result<()> {
             if let Err(err) = crate::collect::collect_once(&config).await {
                 tracing::error!(error = %err, "collect pass failed");
             }
+            if let Err(err) = crate::archive::archive_once(&config).await {
+                tracing::error!(error = %err, "archive pass failed");
+            }
         }
     });
 

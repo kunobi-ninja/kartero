@@ -35,6 +35,13 @@ pub fn is_trusted(event: &str, head_branch: &str, trusted_branch: &str) -> bool 
     matches!(event, "schedule" | "workflow_dispatch" | "push") && head_branch == trusted_branch
 }
 
+pub fn artifact_name_matches(name: &str, prefix: &str) -> bool {
+    name == prefix
+        || name
+            .strip_prefix(prefix)
+            .is_some_and(|rest| rest.starts_with('-'))
+}
+
 impl GitHub {
     pub fn new(config: GitHubConfig) -> Result<Self> {
         let _ = rustls::crypto::ring::default_provider().install_default();
@@ -125,6 +132,15 @@ impl GitHub {
     }
 
     pub async fn download_zip(&self, artifact_id: i64) -> Result<Vec<u8>> {
+        self.download_zip_limited(artifact_id, crate::artifact::MAX_ZIP_BYTES)
+            .await
+    }
+
+    pub async fn download_zip_limited(
+        &self,
+        artifact_id: i64,
+        max_bytes: usize,
+    ) -> Result<Vec<u8>> {
         let url = format!(
             "https://api.github.com/repos/{}/{}/actions/artifacts/{artifact_id}/zip",
             self.config.owner, self.config.repo
@@ -132,13 +148,13 @@ impl GitHub {
         let mut response = self.client.get(url).send().await?.error_for_status()?;
         if response
             .content_length()
-            .is_some_and(|size| size > crate::artifact::MAX_ZIP_BYTES as u64)
+            .is_some_and(|size| size > max_bytes as u64)
         {
             anyhow::bail!("artifact response exceeds the zip size limit");
         }
         let mut bytes = Vec::new();
         while let Some(chunk) = response.chunk().await? {
-            if bytes.len().saturating_add(chunk.len()) > crate::artifact::MAX_ZIP_BYTES {
+            if bytes.len().saturating_add(chunk.len()) > max_bytes {
                 anyhow::bail!("artifact response exceeds the zip size limit");
             }
             bytes.extend_from_slice(&chunk);
@@ -206,5 +222,13 @@ mod tests {
     #[test]
     fn pull_requests_are_never_trusted() {
         assert!(!is_trusted("pull_request", "main", "main"));
+    }
+
+    #[test]
+    fn artifact_prefix_requires_a_dash_before_the_rest() {
+        assert!(artifact_name_matches("bench-firefox", "bench"));
+        assert!(artifact_name_matches("bench", "bench"));
+        assert!(!artifact_name_matches("benchmark-foo", "bench"));
+        assert!(!artifact_name_matches("telemetry-otlp-v1-firefox", "bench"));
     }
 }

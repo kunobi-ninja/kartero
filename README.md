@@ -68,6 +68,11 @@ Kartero stores delivery state in SQLite so a restart does not import the same
 artifact again. SigNoz is only the destination; it is not the deduplication
 store.
 
+The in-cluster process is `kartero run` (the Deployment's args). `collect` is
+one pass for local debug. Archive, when enabled in Helm, writes matching
+GitHub zips onto a PVC on that same loop. See
+[Deploy Kartero](docs/deployment.md#archive-diagnostic-artifacts).
+
 For Kubernetes, install the OCI chart and supply the token through a Kubernetes
 Secret, commonly managed by External Secrets:
 

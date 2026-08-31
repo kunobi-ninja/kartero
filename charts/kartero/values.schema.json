@@ -78,6 +78,28 @@
         "scrape": { "type": "boolean" },
         "path": { "type": "string" }
       }
+    },
+    "archive": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "artifactPrefix": { "type": "string", "minLength": 1 },
+        "maxBytes": { "type": "integer", "minimum": 1 },
+        "path": { "type": "string", "minLength": 1 },
+        "persistence": {
+          "type": "object",
+          "properties": {
+            "type": { "type": "string", "enum": ["ephemeral", "pvc"] },
+            "size": { "type": "string", "minLength": 1 },
+            "storageClassName": { "type": "string" },
+            "accessModes": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "type": "string", "minLength": 1 }
+            }
+          }
+        }
+      }
     }
   }
 }

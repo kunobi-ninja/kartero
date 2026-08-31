@@ -32,6 +32,21 @@ otlp:
   # In-cluster SigNoz collector. Override per environment.
   endpoint: http://signoz-otel-collector.signoz.svc.cluster.local:4318
 
+# Optional on-cluster copy of diagnostic GitHub artifacts (kache `bench-*`
+# zips). Off by default. Independent of OTLP collect: a failed archive pass
+# does not skip metrics delivery. Uses its own PVC; the ledger PVC stays 1Gi.
+archive:
+  enabled: false
+  artifactPrefix: bench
+  maxBytes: 33554432
+  path: /var/lib/kartero-archive
+  persistence:
+    type: pvc
+    size: 50Gi
+    storageClassName: ""
+    accessModes:
+      - ReadWriteOnce
+
 interval: 1h
 heartbeatInterval: 1m
 

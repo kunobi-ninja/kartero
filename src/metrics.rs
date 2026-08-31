@@ -1,4 +1,4 @@
-use crate::self_telemetry::CollectSnapshot;
+use crate::self_telemetry::{ArchiveSnapshot, CollectSnapshot};
 use prometheus::{
     Encoder, Histogram, IntCounterVec, IntGauge, Registry, TextEncoder, histogram_opts, opts,
 };
@@ -16,6 +16,10 @@ pub struct Metrics {
     runs: IntCounterVec,
     artifacts_discovered: IntCounterVec,
     collect_errors: IntCounterVec,
+    archive_artifacts: IntCounterVec,
+    archive_passes: IntCounterVec,
+    archive_duration: Histogram,
+    archive_errors: IntCounterVec,
 }
 
 impl Metrics {
@@ -144,6 +148,57 @@ impl Metrics {
         for component in ["github", "ingest"] {
             let _ = collect_errors.with_label_values(&[component]);
         }
+        let archive_artifacts = IntCounterVec::new(
+            opts!(
+                "kartero_archive_artifacts_total",
+                "Artifacts considered by archive, split by outcome."
+            ),
+            &["outcome"],
+        )
+        .expect("archive artifacts counter");
+        let archive_passes = IntCounterVec::new(
+            opts!(
+                "kartero_archive_passes_total",
+                "Finished archive passes, split by whether the pass itself failed."
+            ),
+            &["outcome"],
+        )
+        .expect("archive passes counter");
+        let archive_duration = Histogram::with_opts(histogram_opts!(
+            "kartero_archive_duration_seconds",
+            "Wall time of one archive pass, including GitHub download and disk write.",
+            vec![0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0]
+        ))
+        .expect("archive duration");
+        let archive_errors = IntCounterVec::new(
+            opts!(
+                "kartero_archive_errors_total",
+                "Archive errors split by bounded component."
+            ),
+            &["component"],
+        )
+        .expect("archive errors counter");
+        registry
+            .register(Box::new(archive_artifacts.clone()))
+            .expect("register archive artifacts");
+        registry
+            .register(Box::new(archive_passes.clone()))
+            .expect("register archive passes");
+        registry
+            .register(Box::new(archive_duration.clone()))
+            .expect("register archive duration");
+        registry
+            .register(Box::new(archive_errors.clone()))
+            .expect("register archive errors");
+        for outcome in ["archived", "skipped", "retryable"] {
+            let _ = archive_artifacts.with_label_values(&[outcome]);
+        }
+        for outcome in ["ok", "error"] {
+            let _ = archive_passes.with_label_values(&[outcome]);
+        }
+        for component in ["github", "store"] {
+            let _ = archive_errors.with_label_values(&[component]);
+        }
         Self {
             registry,
             artifacts,
@@ -156,6 +211,10 @@ impl Metrics {
             runs,
             artifacts_discovered,
             collect_errors,
+            archive_artifacts,
+            archive_passes,
+            archive_duration,
+            archive_errors,
         }
     }
 
@@ -200,6 +259,23 @@ impl Metrics {
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
         self.last_collect_unix.set(now);
+    }
+
+    pub fn inc_archive_artifact(&self, outcome: &str) {
+        self.archive_artifacts.with_label_values(&[outcome]).inc();
+    }
+
+    pub fn observe_archive(&self, snapshot: &ArchiveSnapshot) {
+        self.archive_duration.observe(snapshot.duration_s);
+        self.archive_passes
+            .with_label_values(&[if snapshot.ok { "ok" } else { "error" }])
+            .inc();
+        self.archive_errors
+            .with_label_values(&["github"])
+            .inc_by(snapshot.github_errors);
+        self.archive_errors
+            .with_label_values(&["store"])
+            .inc_by(snapshot.store_errors);
     }
 
     pub fn encode(&self) -> String {

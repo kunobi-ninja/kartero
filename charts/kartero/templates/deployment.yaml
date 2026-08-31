@@ -87,12 +87,30 @@ spec:
                   name: {{ required "github.existingSecret is required" .Values.github.existingSecret | quote }}
                   key: {{ required "github.existingSecretKey is required" .Values.github.existingSecretKey | quote }}
                   optional: false
+            {{- if .Values.archive.enabled }}
+            {{- if not .Values.archive.path }}{{ fail "archive.path is required when archive.enabled is true" }}{{ end }}
+            {{- if and (eq .Values.archive.persistence.type "pvc") (gt (int .Values.replicaCount) 1) }}
+            {{- fail "archive.persistence.type=pvc is single-writer: replicaCount must be 1" }}
+            {{- end }}
+            - name: KARTERO_ARCHIVE
+              value: "true"
+            - name: KARTERO_ARCHIVE_ARTIFACT_PREFIX
+              value: {{ .Values.archive.artifactPrefix | quote }}
+            - name: KARTERO_ARCHIVE_DIR
+              value: {{ .Values.archive.path | quote }}
+            - name: KARTERO_ARCHIVE_MAX_BYTES
+              value: {{ .Values.archive.maxBytes | quote }}
+            {{- end }}
           volumeMounts:
             - name: allowlist
               mountPath: {{ .Values.allowlist.mountPath | quote }}
               readOnly: true
             - name: ledger
               mountPath: {{ .Values.ledger.persistence.mountPath | quote }}
+            {{- if .Values.archive.enabled }}
+            - name: archive
+              mountPath: {{ .Values.archive.path | quote }}
+            {{- end }}
           readinessProbe:
             httpGet:
               path: /readyz
@@ -120,6 +138,17 @@ spec:
           {{- else }}
           {{- fail "ledger.persistence.type must be 'ephemeral' or 'pvc'" }}
           {{- end }}
+        {{- if .Values.archive.enabled }}
+        - name: archive
+          {{- if eq .Values.archive.persistence.type "ephemeral" }}
+          emptyDir: {}
+          {{- else if eq .Values.archive.persistence.type "pvc" }}
+          persistentVolumeClaim:
+            claimName: {{ include "kartero.fullname" . }}-archive
+          {{- else }}
+          {{- fail "archive.persistence.type must be 'ephemeral' or 'pvc'" }}
+          {{- end }}
+        {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

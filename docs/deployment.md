@@ -71,6 +71,31 @@ Adapt the store, item, and property names to the cluster's secret provider.
 The PVC is the normal production path. An ephemeral ledger forgets delivery
 state after a reschedule and can import old artifacts again.
 
+## Archive diagnostic artifacts
+
+Off by default. Turn it on in Helm; the running Deployment (`kartero run`) then
+copies matching GitHub artifacts onto a volume on the same interval as collect.
+There is nothing to cron and no extra command to invoke in the cluster. The
+prefix for kache benches is `bench` (`bench-firefox`, not `telemetry-otlp-v1-*`).
+
+Files land at `{path}/{owner}/{repo}/{run_id}/{attempt}/{artifact}.zip`. Give
+the archive PVC enough space for the nights you want to keep; Kartero does not
+prune it.
+
+```yaml
+archive:
+  enabled: true
+  artifactPrefix: bench
+  maxBytes: 33554432
+  path: /var/lib/kartero-archive
+  persistence:
+    type: pvc
+    size: 50Gi
+    storageClassName: ceph-csi-rbd
+    accessModes:
+      - ReadWriteOnce
+```
+
 For a private image, set `image.repository`, `image.tag`, and
 `imagePullSecrets`. Cluster-level registry proxies do not change the chart's
 credential model.

@@ -13,6 +13,14 @@ pub struct Config {
     pub allowlist_path: PathBuf,
     pub ledger_path: PathBuf,
     pub artifact_prefix: String,
+    pub archive: Option<ArchiveConfig>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ArchiveConfig {
+    pub artifact_prefix: String,
+    pub dir: PathBuf,
+    pub max_bytes: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -38,6 +46,20 @@ struct FileConfig {
     ledger: PathBuf,
     #[serde(default = "default_prefix")]
     artifact_prefix: String,
+    #[serde(default)]
+    archive: Option<FileArchive>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FileArchive {
+    #[serde(default)]
+    enabled: bool,
+    #[serde(default = "default_archive_prefix")]
+    artifact_prefix: String,
+    #[serde(default)]
+    dir: PathBuf,
+    #[serde(default = "default_archive_max_bytes")]
+    max_bytes: usize,
 }
 
 #[derive(Debug, Deserialize)]
@@ -75,6 +97,15 @@ fn default_workflows() -> Vec<String> {
 }
 fn default_branch() -> String {
     "main".into()
+}
+fn default_archive_prefix() -> String {
+    "bench".into()
+}
+fn default_archive_dir() -> PathBuf {
+    PathBuf::from("/var/lib/kartero-archive")
+}
+fn default_archive_max_bytes() -> usize {
+    32 * 1024 * 1024
 }
 
 impl Config {
@@ -124,6 +155,7 @@ impl Config {
             ),
             artifact_prefix: std::env::var("KARTERO_ARTIFACT_PREFIX")
                 .unwrap_or_else(|_| default_prefix()),
+            archive: archive_from_env()?,
         })
     }
 
@@ -156,6 +188,7 @@ impl Config {
             allowlist_path: file.allowlist,
             ledger_path: file.ledger,
             artifact_prefix: file.artifact_prefix,
+            archive: archive_from_file(file.archive)?,
         })
     }
 }
@@ -194,6 +227,74 @@ fn validate_workflows(workflows: Vec<String>) -> Result<Vec<String>> {
     Ok(workflows)
 }
 
+fn archive_from_env() -> Result<Option<ArchiveConfig>> {
+    if !env_flag("KARTERO_ARCHIVE") {
+        return Ok(None);
+    }
+    Ok(Some(require_archive(ArchiveConfig {
+        artifact_prefix: std::env::var("KARTERO_ARCHIVE_ARTIFACT_PREFIX")
+            .unwrap_or_else(|_| default_archive_prefix()),
+        dir: std::env::var("KARTERO_ARCHIVE_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| default_archive_dir()),
+        max_bytes: parse_max_bytes(
+            &std::env::var("KARTERO_ARCHIVE_MAX_BYTES")
+                .unwrap_or_else(|_| default_archive_max_bytes().to_string()),
+        )?,
+    })?))
+}
+
+fn archive_from_file(file: Option<FileArchive>) -> Result<Option<ArchiveConfig>> {
+    let Some(file) = file else {
+        return Ok(None);
+    };
+    if !file.enabled {
+        return Ok(None);
+    }
+    Ok(Some(require_archive(ArchiveConfig {
+        artifact_prefix: file.artifact_prefix,
+        dir: if file.dir.as_os_str().is_empty() {
+            default_archive_dir()
+        } else {
+            file.dir
+        },
+        max_bytes: file.max_bytes,
+    })?))
+}
+
+fn require_archive(config: ArchiveConfig) -> Result<ArchiveConfig> {
+    if config.dir.as_os_str().is_empty() {
+        bail!("archive.dir / KARTERO_ARCHIVE_DIR is required when archive is enabled");
+    }
+    if config.artifact_prefix.trim().is_empty() {
+        bail!("archive artifact prefix must be non-empty");
+    }
+    if config.max_bytes == 0 {
+        bail!("archive max bytes must be greater than zero");
+    }
+    Ok(ArchiveConfig {
+        artifact_prefix: config.artifact_prefix.trim().to_string(),
+        dir: config.dir,
+        max_bytes: config.max_bytes,
+    })
+}
+
+fn env_flag(name: &str) -> bool {
+    std::env::var(name)
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn parse_max_bytes(spec: &str) -> Result<usize> {
+    spec.parse()
+        .with_context(|| format!("archive max bytes {spec}"))
+}
+
 fn require_github_token(token: String) -> Result<String> {
     let token = token.trim().to_string();
     if token.is_empty() {
@@ -229,5 +330,23 @@ mod tests {
         assert!(require_github_token(String::new()).is_err());
         assert!(require_github_token("  ".into()).is_err());
         assert_eq!(require_github_token(" token\n".into()).unwrap(), "token");
+    }
+
+    #[test]
+    fn archive_requires_a_directory_and_a_prefix() {
+        let incomplete = ArchiveConfig {
+            artifact_prefix: "bench".into(),
+            dir: PathBuf::new(),
+            max_bytes: 32,
+        };
+        assert!(require_archive(incomplete).is_err());
+        let ready = require_archive(ArchiveConfig {
+            artifact_prefix: " bench ".into(),
+            dir: PathBuf::from("/var/lib/kartero-archive"),
+            max_bytes: 1024,
+        })
+        .unwrap();
+        assert_eq!(ready.artifact_prefix, "bench");
+        assert_eq!(ready.dir, PathBuf::from("/var/lib/kartero-archive"));
     }
 }
