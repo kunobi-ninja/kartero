@@ -26,6 +26,19 @@ sources:
     trustedBranch: dev
     existingSecret: kartero-github-kunobi-frontend
     existingSecretKey: token
+    actions:
+      gateJob: CI Gate
+      guardJob: E2E-only filter detected
+      guardStep: Reject filtered CI as a complete validation
+      filterJob: changes
+      docsJob: Docs checks
+      branchClasses:
+        dev: trunk_dev
+        main: trunk_main
+      jobAliases:
+        "e2e / test": e2e
+      canonicalJobs: [changes, CI Gate, e2e]
+      excludedWorkflows: [.github/workflows/e2e-flake-nightly.yaml]
 archive:
   enabled: true
 YAML
@@ -60,7 +73,7 @@ echo "$output"
 
 for expected in \
   "source kunobi-ninja/kache branch=main workflows=bench.yml,ci.yml token=present" \
-  "source kunobi-ninja/kunobi-frontend branch=dev workflows=ci.yaml token=present" \
+  "source kunobi-ninja/kunobi-frontend branch=dev workflows=ci.yaml token=present derives=yes" \
   "archive=true"; do
   if ! grep -qF "$expected" <<<"$output"; then
     echo "rendered chart config did not resolve as expected: $expected" >&2

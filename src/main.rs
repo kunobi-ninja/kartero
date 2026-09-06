@@ -36,7 +36,7 @@ async fn main() -> Result<()> {
             // Tokens are never printed, only whether one resolved.
             for source in &config.sources {
                 println!(
-                    "source {} branch={} workflows={} token={}",
+                    "source {} branch={} workflows={} token={} derives={}",
                     source.slug(),
                     source.trusted_branch,
                     source.workflows.join(","),
@@ -44,6 +44,11 @@ async fn main() -> Result<()> {
                         "missing"
                     } else {
                         "present"
+                    },
+                    if source.actions.is_some() {
+                        "yes"
+                    } else {
+                        "no"
                     }
                 );
             }

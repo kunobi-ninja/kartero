@@ -42,6 +42,32 @@ data:
         {{- range (required "each source needs at least one workflow" $source.workflows) }}
           - {{ . | quote }}
         {{- end }}
+        {{- with $source.actions }}
+        # Deriving metrics from this source's runs. Absent means the source is
+        # only read for artifacts, which is what every source did before this.
+        actions:
+          gate_job: {{ required "actions needs a gateJob" .gateJob | quote }}
+          guard_job: {{ required "actions needs a guardJob" .guardJob | quote }}
+          guard_step: {{ required "actions needs a guardStep" .guardStep | quote }}
+          filter_job: {{ required "actions needs a filterJob" .filterJob | quote }}
+          docs_job: {{ required "actions needs a docsJob" .docsJob | quote }}
+          branch_classes:
+            {{- range $branch, $class := .branchClasses }}
+            {{ $branch | quote }}: {{ $class | quote }}
+            {{- end }}
+          job_aliases:
+            {{- range $from, $to := .jobAliases }}
+            {{ $from | quote }}: {{ $to | quote }}
+            {{- end }}
+          canonical_jobs:
+            {{- range .canonicalJobs }}
+            - {{ . | quote }}
+            {{- end }}
+          excluded_workflows:
+            {{- range .excludedWorkflows }}
+            - {{ . | quote }}
+            {{- end }}
+        {{- end }}
     {{- end }}
     {{- if .Values.archive.enabled }}
     archive:
