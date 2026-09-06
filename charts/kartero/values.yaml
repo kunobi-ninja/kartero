@@ -117,13 +117,16 @@ containerSecurityContext:
     drop:
       - ALL
 
+# Sized for the payload, not the idle process, which sits around 2Mi. A parsed
+# OTLP document is several times the size of its source, so the ceiling has to
+# clear MAX_JSON_BYTES with room to re-serialise it.
 resources:
   requests:
     cpu: 50m
-    memory: 64Mi
+    memory: 128Mi
   limits:
     cpu: 250m
-    memory: 128Mi
+    memory: 512Mi
 
 # Own telemetry reaches SigNoz two ways: scrape of /metrics (these
 # annotations) and OTLP/HTTP posts to otlp.endpoint. Process heartbeat

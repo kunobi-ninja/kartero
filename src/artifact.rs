@@ -5,7 +5,7 @@ use zip::ZipArchive;
 pub const MAX_ZIP_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_UNCOMPRESSED_BYTES: u64 = 16 * 1024 * 1024;
 pub const MAX_ENTRIES: usize = 16;
-pub const MAX_JSON_BYTES: usize = 2 * 1024 * 1024;
+pub const MAX_JSON_BYTES: usize = 16 * 1024 * 1024;
 pub const METRICS_FILE: &str = "metrics.otlp.json";
 pub const SCHEMA_VERSION_FILE: &str = "schema_version";
 
@@ -70,8 +70,16 @@ pub fn open(bytes: &[u8]) -> Result<ArtifactPayload> {
             if size > MAX_JSON_BYTES as u64 {
                 bail!("{METRICS_FILE} is {size} bytes, over the {MAX_JSON_BYTES} bound");
             }
+            // The check above trusts the zip's declared size. Reading through
+            // a limit as well means a header that lies cannot spend more than
+            // the bound anyway.
             let mut buf = Vec::new();
-            entry.read_to_end(&mut buf)?;
+            entry
+                .take(MAX_JSON_BYTES as u64 + 1)
+                .read_to_end(&mut buf)?;
+            if buf.len() > MAX_JSON_BYTES {
+                bail!("{METRICS_FILE} exceeds the {MAX_JSON_BYTES} bound once decompressed");
+            }
             metrics_json = Some(buf);
             continue;
         }
