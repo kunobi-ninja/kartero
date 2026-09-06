@@ -55,7 +55,8 @@ async fn archive_inner(
     let ledger = Ledger::open(&config.ledger_path)?;
     let mut failed = Vec::new();
     for source in &config.sources {
-        if let Err(err) = archive_source(archive, source, &ledger, snapshot).await {
+        if let Err(err) = archive_source(archive, source, config.lookback, &ledger, snapshot).await
+        {
             warn!(source = %source.slug(), error = %err, "archiving source failed");
             failed.push(source.slug());
         }
@@ -69,11 +70,12 @@ async fn archive_inner(
 async fn archive_source(
     archive: &ArchiveConfig,
     source: &SourceConfig,
+    lookback: std::time::Duration,
     ledger: &Ledger,
     snapshot: &mut ArchiveSnapshot,
 ) -> Result<()> {
     let github = GitHub::new(source.clone())?;
-    let runs = match github.list_completed_runs().await {
+    let runs = match github.list_completed_runs(lookback).await {
         Ok(runs) => runs,
         Err(err) => {
             snapshot.github_errors += 1;
@@ -250,6 +252,7 @@ mod tests {
             bind: "127.0.0.1:0".into(),
             interval: Duration::from_secs(3600),
             heartbeat_interval: Duration::from_secs(60),
+            lookback: Duration::from_secs(86_400),
             sources: vec![SourceConfig {
                 token: "token".into(),
                 owner: "kunobi-ninja".into(),

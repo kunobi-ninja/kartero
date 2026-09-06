@@ -9,6 +9,10 @@ pub struct Config {
     pub bind: String,
     pub interval: Duration,
     pub heartbeat_interval: Duration,
+    /// How far back a pass lists runs. Wider than `interval` on purpose: a run
+    /// still executing when one pass looks has to still be in the listing when
+    /// the next one does.
+    pub lookback: Duration,
     pub sources: Vec<SourceConfig>,
     pub otlp_endpoint: String,
     pub allowlist_path: PathBuf,
@@ -95,6 +99,8 @@ struct FileConfig {
     interval: String,
     #[serde(default = "default_heartbeat_interval")]
     heartbeat_interval: String,
+    #[serde(default = "default_lookback")]
+    lookback: String,
     /// One source, the shape every deployment used before `sources` existed.
     #[serde(default)]
     github: Option<FileSource>,
@@ -171,6 +177,9 @@ fn default_interval() -> String {
 fn default_heartbeat_interval() -> String {
     "1m".into()
 }
+fn default_lookback() -> String {
+    "24h".into()
+}
 fn default_prefix() -> String {
     "telemetry-otlp-v1".into()
 }
@@ -211,6 +220,9 @@ impl Config {
             heartbeat_interval: parse_duration(
                 &std::env::var("KARTERO_HEARTBEAT_INTERVAL")
                     .unwrap_or_else(|_| default_heartbeat_interval()),
+            )?,
+            lookback: parse_duration(
+                &std::env::var("KARTERO_LOOKBACK").unwrap_or_else(|_| default_lookback()),
             )?,
             // The environment describes one source. Several sources need
             // per-source tokens and branches, which a flat namespace cannot
@@ -259,6 +271,7 @@ impl Config {
             bind: file.bind,
             interval: parse_duration(&file.interval)?,
             heartbeat_interval: parse_duration(&file.heartbeat_interval)?,
+            lookback: parse_duration(&file.lookback)?,
             sources: resolve_sources(file.github, file.sources, &fallback)?,
             otlp_endpoint: file.otlp.endpoint,
             allowlist_path: file.allowlist,
