@@ -26,6 +26,24 @@ A sweep runs on a schedule, reads the Actions API for runs that have already
 finished, derives metrics for many of them at once, and writes one artifact.
 That brings three requirements the in-job shape does not have.
 
+Use the library rather than writing OTLP by hand:
+
+```ts
+import { buildMetricsOtlp, writeArtifact } from '@kunobi/kartero'
+
+await writeArtifact('telemetry', buildMetricsOtlp(points, {
+  resource: { 'service.namespace': 'kunobi', 'service.name': 'github-actions-ci' },
+  scope: { name: 'my-collector', version: '1' },
+}))
+```
+
+Each point names its metric, instrument (`gauge`, `counter`, `histogram`),
+unit, value, attributes and the instant it describes. Counters become
+monotonic delta sums; histograms need explicit bounds and are bucketed for
+you. The builder refuses one metric carrying two instruments or two units,
+non-ascending bounds, and any `cicd.*` or `vcs.*` attribute — all things a
+hand-rolled emitter gets wrong quietly.
+
 **Every point carries its own timestamp.** A run that finished three days ago
 has to land three days ago, not at the moment of the sweep. One artifact can
 carry points spanning a week, and OTLP allows that because the timestamp lives

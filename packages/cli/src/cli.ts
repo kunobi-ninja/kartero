@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { ARTIFACT_SCHEMA_VERSION, buildCoverageOtlp, parseCoverage, type CoverageFormat } from './coverage.js'
 import { buildGaugeOtlp, parseAttribute } from './gauge.js'
+import { writeArtifact } from './metrics.js'
 import { validateArtifactDirectory } from './validate.js'
 
 const USAGE = `Usage:
@@ -95,9 +96,7 @@ async function coverage(args: string[]): Promise<void> {
     timestamp,
   })
 
-  await mkdir(output)
-  await writeFile(join(output, 'metrics.otlp.json'), `${JSON.stringify(payload)}\n`, { flag: 'wx' })
-  await writeFile(join(output, 'schema_version'), `${ARTIFACT_SCHEMA_VERSION}\n`, { flag: 'wx' })
+  await writeArtifact(output, payload)
   console.log(`wrote Kartero coverage artifact to ${output}`)
 }
 
@@ -116,9 +115,7 @@ async function gauge(args: string[]): Promise<void> {
     unit: parsed.flags.get('--unit') ?? '1',
   })
 
-  await mkdir(output)
-  await writeFile(join(output, 'metrics.otlp.json'), `${JSON.stringify(payload)}\n`, { flag: 'wx' })
-  await writeFile(join(output, 'schema_version'), `${ARTIFACT_SCHEMA_VERSION}\n`, { flag: 'wx' })
+  await writeArtifact(output, payload)
   console.log(`wrote Kartero gauge artifact to ${output}`)
 }
 

@@ -27,6 +27,8 @@
     "dist/coverage.js",
     "dist/coverage.d.ts",
     "dist/gauge.js",
+    "dist/metrics.js",
+    "dist/metrics.d.ts",
     "dist/gauge.d.ts",
     "dist/index.js",
     "dist/index.d.ts",
