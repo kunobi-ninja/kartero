@@ -1,82 +1,38 @@
-# Reviewed metric and attribute registry. Unknown names are dropped, never
-# forwarded. Adding a series means adding a line here.
-metrics:
-  - kache.bench.build.duration
-  - kache.bench.compile.time_saved
-  - kache.bench.compile.units
-  - kache.bench.cache.hit_rate
-  - kache.bench.cache.weighted_hit_rate
-  - kache.bench.leak_warnings
-  - kache.bench.speedup
-  - kache.bench.cache.size
-  - kache.bench.objdir.size
-  - kache.bench.disk.consumed
-  - kache.bench.key_stability
-  - kache.bench.verdict.ok
-  - kache.ci.coverage.lines
-  - kache.ci.coverage.lines.covered
-  - kache.ci.coverage.lines.total
-  - ci.coverage.percent
-  - ci.coverage.covered
-  - ci.coverage.total
-  - ci.run.attempts
-  - ci.run.gate.duration
-  - ci.run.checks.duration
-  - ci.run.attempt.outcomes
-  - ci.job.duration
-  - ci.job.queue.duration
-  - ci.job.conclusions
-  - ci.job.rerun_recovered
-  - ci.collector.last_success
-  - ci.collector.anomalies
-  - kache.cache.store.size
-  - kache.cache.store.entries
-  - kache.cache.store.max
-  - kache.cache.uploads
-  - kache.cache.uploads.pending
-  - kache.cache.downloads
-  - kache.cache.downloads.active
-  - kache.cache.bytes
-  - kache.cache.s3.concurrency
-  - kache.cache.remote.degraded
-  - kache.cache.remote_checks
-  - kache.cache.negative_hits
-  - kache.cache.negative_entries
-  - kache.prefetch.downloads
-  - kache.prefetch.bytes
-  - kache.prefetch.keys_used
-  - kache.prefetch.keys_cancelled
-  - kache.prefetch.keys_over_budget
-  - kache.prefetch.plans
-  - kache.prefetch.list.requests
-  - kache.prefetch.list.failures
-  - kache.prefetch.pack.requests
-  - kache.prefetch.v3.requests
-  - kache.prefetch.cancelled
-  - kache.prefetch.last_plan.candidates
-  - kache.prefetch.last_plan.wall
+# Reviewed metric and attribute registry. A name that matches nothing here is
+# dropped, never forwarded.
+#
+# Names can be admitted one at a time under `metrics` / `attributes`, or by
+# family under `metric_patterns` / `attribute_patterns`. Patterns are regular
+# expressions, anchored to the whole name: `ci\..+` cannot match
+# `anything.ci.whatever`, and an author's own `^`/`$` are harmless.
+#
+# A pattern trades review for ergonomics. Admitting `ci\..+` means a producer
+# can open a new `ci.*` series without anyone approving that specific name, and
+# a family listed here should be one whose namespace is already owned by a
+# trusted producer. What patterns do not relax is attribute *values*: an
+# unbounded value costs a series per run, and `attribute_values` below is the
+# only thing standing between a vocabulary and that bill.
+
+metric_patterns:
+  # Benchmark and daemon telemetry from kache.
+  - 'kache\.(bench|cache|prefetch|ci)\..+'
+  # Pipeline telemetry from any collected repository.
+  - 'ci\.(run|job|coverage|collector)\..+'
+
+metrics: []
+
+attribute_patterns:
+  - 'kache\.(bench|cache|prefetch|telemetry)\..+'
+  # Resource identity. `cicd.*` and `vcs.*` are absent on purpose: Kartero
+  # stamps those from the trusted GitHub run and strips whatever arrived.
+  - '(service|deployment|telemetry)\..+'
 
 attributes:
-  - kache.telemetry.schema_version
-  - kache.bench.git_ref
-  - kache.bench.project
-  - kache.bench.cache_tool
-  - kache.bench.phase
-  - kache.bench.result
-  - kache.cache.remote
-  - kache.cache.scenario
-  - kache.cache.phase
-  - kache.cache.result
-  - kache.cache.direction
-  - kache.cache.limit
-  - kache.prefetch.kind
   - cicd.pipeline.name
   - vcs.repository.url.full
-  - service.namespace
-  - service.name
-  - service.version
-  - deployment.environment
-  - telemetry.plane
+  # Pipeline telemetry. Bare names with no namespace to group them, so each is
+  # listed. That is the intended cost: an attribute key multiplies series, and
+  # this is the surface where a careless one would be expensive.
   - language
   - kind
   - branch_class
@@ -100,10 +56,10 @@ attributes:
 # has to be reviewed before the new value can arrive.
 #
 # The keys left out are bounded by the producer rather than here — a job name
-# comes from a reviewed alias table, a repository from this file's own source
-# list. Kartero takes those on trust. Run ids, commit hashes, raw branch names,
-# actor logins and runner names are absent from `attributes` entirely, which is
-# the stronger guarantee: they cannot be sent at all.
+# comes from a reviewed alias table, a repository from this deployment's own
+# source list. Kartero takes those on trust. Run ids, commit hashes, raw branch
+# names, actor logins and runner names match nothing above, which is the
+# stronger guarantee: they cannot be sent at all.
 attribute_values:
   branch_class:
     - pull_request
@@ -129,6 +85,9 @@ attribute_values:
     - after_cancelled
     - other
 
+# Bench runs must name a project, and it must be one of these. Unlike the
+# vocabularies above this one is required rather than merely checked: a
+# `kache.bench.*` point carrying no project, or an unlisted one, is dropped.
 projects:
   - bench-firefox
   - bench-firefox-windows

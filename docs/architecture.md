@@ -11,9 +11,14 @@ Kartero separates producing telemetry from delivering it.
    OTLP/HTTP.
 6. The SQLite ledger records the terminal result for that artifact.
 
-The artifact boundary keeps OTLP credentials out of GitHub Actions. Producers
-cannot choose arbitrary metric names or repository attributes because the
-collector filters and stamps them before delivery.
+The artifact boundary keeps OTLP credentials out of GitHub Actions. A producer
+cannot claim a repository or pipeline identity: the collector strips whatever
+arrived and stamps its own from the trusted GitHub run.
+
+Metric and attribute names are constrained rather than fixed. The allowlist
+admits them individually or by family pattern, so within a family the
+allowlist already trusts, a producer can open a name nobody approved
+one at a time. See [the allowlist](allowlist.md) for where that line sits.
 
 The current collector watches one GitHub repository and multiple workflow files.
 Run another Kartero instance for another repository until multi-source support is
