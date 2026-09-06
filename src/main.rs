@@ -17,6 +17,10 @@ enum Command {
     Collect,
     /// One archive pass, then exit. For local debug; production is Helm `archive.enabled` plus a volume.
     Archive,
+    /// Load the configuration, print the sources it resolved, and exit.
+    /// Contacts nothing. Answers "will this Deployment start" without
+    /// starting it, which is what makes a rendered chart testable.
+    ConfigCheck,
 }
 
 #[tokio::main]
@@ -28,6 +32,31 @@ async fn main() -> Result<()> {
         Command::Run => kartero::http::serve(config).await,
         Command::Collect => kartero::collect::collect_once(&config).await,
         Command::Archive => kartero::archive::archive_once(&config).await,
+        Command::ConfigCheck => {
+            // Tokens are never printed, only whether one resolved.
+            for source in &config.sources {
+                println!(
+                    "source {} branch={} workflows={} token={}",
+                    source.slug(),
+                    source.trusted_branch,
+                    source.workflows.join(","),
+                    if source.token.is_empty() {
+                        "missing"
+                    } else {
+                        "present"
+                    }
+                );
+            }
+            println!(
+                "otlp={} allowlist={} ledger={} prefix={} archive={}",
+                config.otlp_endpoint,
+                config.allowlist_path.display(),
+                config.ledger_path.display(),
+                config.artifact_prefix,
+                config.archive.is_some()
+            );
+            Ok(())
+        }
     }
 }
 

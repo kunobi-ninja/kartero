@@ -1,4 +1,4 @@
-use crate::config::GitHubConfig;
+use crate::config::SourceConfig;
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::time::Duration;
@@ -28,7 +28,7 @@ pub struct ArtifactRef {
 
 pub struct GitHub {
     client: reqwest::Client,
-    config: GitHubConfig,
+    config: SourceConfig,
 }
 
 pub fn is_trusted(event: &str, head_branch: &str, trusted_branch: &str) -> bool {
@@ -43,7 +43,7 @@ pub fn artifact_name_matches(name: &str, prefix: &str) -> bool {
 }
 
 impl GitHub {
-    pub fn new(config: GitHubConfig) -> Result<Self> {
+    pub fn new(config: SourceConfig) -> Result<Self> {
         let _ = rustls::crypto::ring::default_provider().install_default();
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(

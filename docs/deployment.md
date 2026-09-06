@@ -71,6 +71,48 @@ Adapt the store, item, and property names to the cluster's secret provider.
 The PVC is the normal production path. An ephemeral ledger forgets delivery
 state after a reschedule and can import old artifacts again.
 
+## Several repositories
+
+Set `sources` instead of `github` to collect from more than one repository in a
+single Deployment. The two are mutually exclusive; setting both fails at
+startup rather than picking one.
+
+```yaml
+sources:
+  - owner: kunobi-ninja
+    repo: kache
+    workflows: [bench.yml, ci.yml]
+    trustedBranch: main
+    existingSecret: kartero-github-kache
+    existingSecretKey: token
+  - owner: kunobi-ninja
+    repo: kunobi-frontend
+    workflows: [ci.yaml]
+    trustedBranch: dev
+    existingSecret: kartero-github-kunobi-frontend
+    existingSecretKey: token
+```
+
+Each source needs its own Secret, mounted read-only, and its own trusted
+branch — `main` for one repository and `dev` for another is the normal case,
+not an exception.
+
+With `sources` set the chart renders a config file and the collector reads
+that instead of its environment. `github.artifactPrefix` still applies; the
+rest of the `github` block is ignored.
+
+`kartero config-check` loads a configuration, prints the sources it resolved,
+and exits without contacting anything. It reports whether each token resolved,
+never the token itself. Use it to check a config before a rollout:
+
+```bash
+KARTERO_CONFIG=/etc/kartero/config/kartero.yaml kartero config-check
+```
+
+One instance means one ledger and one allowlist for every source. A second
+Deployment is still an option, and costs a second PVC, a second token to
+rotate and a second thing to watch.
+
 ## Archive diagnostic artifacts
 
 Off by default. Turn it on in Helm; the running Deployment (`kartero run`) then

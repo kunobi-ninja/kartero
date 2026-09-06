@@ -40,6 +40,7 @@ jobs:
       - run: ./scripts/check-version-consistency.sh
       - run: helm lint charts/kartero
       - run: helm template kartero charts/kartero >/dev/null
+      - run: ./scripts/test-chart-config.sh
 
   image:
     if: github.event_name != 'push'

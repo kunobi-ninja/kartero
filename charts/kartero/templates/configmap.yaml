@@ -8,3 +8,46 @@ metadata:
 data:
   allowlist.yaml: |
 {{ .Files.Get "allowlist.yaml" | indent 4 }}
+{{- if .Values.sources }}
+---
+# Several sources cannot be described by environment variables: each one has
+# its own token, branch and workflow list, and a flat namespace has no way to
+# say which value belongs to which repository without inventing an index
+# convention. With `sources` set the collector reads this file instead, and
+# every environment variable below KARTERO_CONFIG stops being consulted.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "kartero.fullname" . }}-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kartero.labels" . | nindent 4 }}
+data:
+  kartero.yaml: |
+    bind: "0.0.0.0:{{ .Values.service.port }}"
+    interval: {{ .Values.interval | quote }}
+    heartbeat_interval: {{ .Values.heartbeatInterval | quote }}
+    artifact_prefix: {{ .Values.github.artifactPrefix | quote }}
+    otlp:
+      endpoint: {{ .Values.otlp.endpoint | quote }}
+    allowlist: {{ printf "%s/allowlist.yaml" .Values.allowlist.mountPath | quote }}
+    ledger: {{ .Values.ledger.path | quote }}
+    sources:
+    {{- range $index, $source := .Values.sources }}
+      - owner: {{ required "each source needs an owner" $source.owner | quote }}
+        repo: {{ required "each source needs a repo" $source.repo | quote }}
+        trusted_branch: {{ $source.trustedBranch | default "main" | quote }}
+        token_file: {{ printf "/etc/kartero/tokens/%d/%s" $index (required "each source needs existingSecretKey" $source.existingSecretKey) | quote }}
+        workflows:
+        {{- range (required "each source needs at least one workflow" $source.workflows) }}
+          - {{ . | quote }}
+        {{- end }}
+    {{- end }}
+    {{- if .Values.archive.enabled }}
+    archive:
+      enabled: true
+      artifact_prefix: {{ .Values.archive.artifactPrefix | quote }}
+      dir: {{ .Values.archive.path | quote }}
+      max_bytes: {{ .Values.archive.maxBytes | int64 }}
+    {{- end }}
+{{- end }}

@@ -1,6 +1,6 @@
 use crate::allowlist::Allowlist;
 use crate::artifact::{self, MAX_ZIP_BYTES};
-use crate::config::Config;
+use crate::config::{Config, SourceConfig};
 use crate::github::{self, ArtifactRef, GitHub, WorkflowRun};
 use crate::ledger::{DeliveryKey, DeliveryStatus, Ledger};
 use crate::metrics::Metrics;
@@ -14,7 +14,7 @@ use tracing::{info, warn};
 pub async fn collect_once(config: &Config) -> Result<()> {
     let started = Instant::now();
     let mut snapshot = CollectSnapshot {
-        sources: config.github.workflows.len() as u64,
+        sources: config.sources.len() as u64,
         ..CollectSnapshot::default()
     };
     let result = collect_inner(config, &mut snapshot).await;
@@ -44,7 +44,6 @@ async fn emit_self_telemetry(config: &Config, snapshot: &CollectSnapshot) {
 async fn collect_inner(config: &Config, snapshot: &mut CollectSnapshot) -> Result<()> {
     let allowlist = Allowlist::load(&config.allowlist_path)?;
     let ledger = Ledger::open(&config.ledger_path)?;
-    let github = GitHub::new(config.github.clone())?;
     let metrics = Metrics::global();
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
@@ -52,15 +51,46 @@ async fn collect_inner(config: &Config, snapshot: &mut CollectSnapshot) -> Resul
         .timeout(Duration::from_secs(60))
         .build()?;
 
+    // One source failing must not skip the ones after it. A repository whose
+    // token expired would otherwise silently stop collection for every other
+    // repository in the same process.
+    let mut failed = Vec::new();
+    for source in &config.sources {
+        let result = collect_source(
+            config, source, &allowlist, &ledger, &client, metrics, snapshot,
+        )
+        .await;
+        if let Err(err) = result {
+            warn!(source = %source.slug(), error = %err, "collecting source failed");
+            failed.push(source.slug());
+        }
+    }
+    if !failed.is_empty() {
+        bail!("collection failed for {}", failed.join(", "));
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn collect_source(
+    config: &Config,
+    source: &SourceConfig,
+    allowlist: &Allowlist,
+    ledger: &Ledger,
+    client: &reqwest::Client,
+    metrics: &Metrics,
+    snapshot: &mut CollectSnapshot,
+) -> Result<()> {
+    let github = GitHub::new(source.clone())?;
     let runs = match github.list_completed_runs().await {
         Ok(runs) => runs,
         Err(err) => {
             snapshot.github_errors += 1;
-            warn!(error = %err, "listing completed GitHub workflow runs failed");
+            warn!(source = %source.slug(), error = %err, "listing completed GitHub workflow runs failed");
             return Err(err);
         }
     };
-    snapshot.runs_seen = runs.len() as u64;
+    snapshot.runs_seen += runs.len() as u64;
     let mut had_errors = false;
     for run in runs {
         if !github.trusted(&run) {
@@ -70,7 +100,7 @@ async fn collect_inner(config: &Config, snapshot: &mut CollectSnapshot) -> Resul
         let artifacts = match github.list_artifacts(run.run_id).await {
             Ok(list) => list,
             Err(err) => {
-                warn!(run_id = run.run_id, error = %err, "listing artifacts failed");
+                warn!(source = %source.slug(), run_id = run.run_id, error = %err, "listing artifacts failed");
                 snapshot.github_errors += 1;
                 had_errors = true;
                 continue;
@@ -83,11 +113,12 @@ async fn collect_inner(config: &Config, snapshot: &mut CollectSnapshot) -> Resul
             }
             snapshot.artifacts_matched += 1;
             if let Err(err) = ingest_one(
-                config, &allowlist, &ledger, &github, &client, metrics, snapshot, &run, &artifact,
+                config, allowlist, ledger, &github, client, metrics, snapshot, &run, &artifact,
             )
             .await
             {
                 warn!(
+                    source = %source.slug(),
                     run_id = run.run_id,
                     artifact = %artifact.name,
                     error = %err,

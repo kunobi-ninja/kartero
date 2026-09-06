@@ -8,7 +8,7 @@ pub struct Config {
     pub bind: String,
     pub interval: Duration,
     pub heartbeat_interval: Duration,
-    pub github: GitHubConfig,
+    pub sources: Vec<SourceConfig>,
     pub otlp_endpoint: String,
     pub allowlist_path: PathBuf,
     pub ledger_path: PathBuf,
@@ -23,13 +23,24 @@ pub struct ArchiveConfig {
     pub max_bytes: usize,
 }
 
+/// One repository Kartero reads, with the workflows and branch it trusts
+/// there. Each source carries its own token: a fine-grained token is scoped to
+/// the repositories it was minted for, so covering two repositories with one
+/// token is a choice rather than a requirement.
 #[derive(Debug, Clone)]
-pub struct GitHubConfig {
+pub struct SourceConfig {
     pub token: String,
     pub owner: String,
     pub repo: String,
     pub workflows: Vec<String>,
     pub trusted_branch: String,
+}
+
+impl SourceConfig {
+    /// `owner/repo`, for logs and for telling two sources apart.
+    pub fn slug(&self) -> String {
+        format!("{}/{}", self.owner, self.repo)
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -40,7 +51,15 @@ struct FileConfig {
     interval: String,
     #[serde(default = "default_heartbeat_interval")]
     heartbeat_interval: String,
-    github: FileGitHub,
+    /// One source, the shape every deployment used before `sources` existed.
+    #[serde(default)]
+    github: Option<FileSource>,
+    #[serde(default)]
+    sources: Vec<FileSource>,
+    /// Token for sources that do not carry their own.
+    #[serde(default)]
+    token: String,
+    token_file: Option<PathBuf>,
     otlp: FileOtlp,
     allowlist: PathBuf,
     ledger: PathBuf,
@@ -63,7 +82,7 @@ struct FileArchive {
 }
 
 #[derive(Debug, Deserialize)]
-struct FileGitHub {
+struct FileSource {
     #[serde(default)]
     token: String,
     token_file: Option<PathBuf>,
@@ -130,7 +149,11 @@ impl Config {
                 &std::env::var("KARTERO_HEARTBEAT_INTERVAL")
                     .unwrap_or_else(|_| default_heartbeat_interval()),
             )?,
-            github: GitHubConfig {
+            // The environment describes one source. Several sources need
+            // per-source tokens and branches, which a flat namespace cannot
+            // express without inventing an index convention; that is what
+            // KARTERO_CONFIG is for.
+            sources: vec![SourceConfig {
                 token,
                 owner: std::env::var("KARTERO_GITHUB_OWNER")
                     .unwrap_or_else(|_| "kunobi-ninja".into()),
@@ -141,7 +164,7 @@ impl Config {
                 )?,
                 trusted_branch: std::env::var("KARTERO_TRUSTED_BRANCH")
                     .unwrap_or_else(|_| default_branch()),
-            },
+            }],
             otlp_endpoint: std::env::var("KARTERO_OTLP_ENDPOINT").unwrap_or_else(|_| {
                 "http://signoz-otel-collector.signoz.svc.cluster.local:4318".into()
             }),
@@ -164,26 +187,12 @@ impl Config {
             .with_context(|| format!("reading config {}", path.display()))?;
         let file: FileConfig = serde_yaml::from_str(&raw)
             .with_context(|| format!("parsing config {}", path.display()))?;
-        let token = if let Some(token_file) = file.github.token_file {
-            std::fs::read_to_string(&token_file)
-                .with_context(|| format!("reading GitHub token from {}", token_file.display()))?
-                .trim()
-                .to_string()
-        } else {
-            file.github.token
-        };
-        let token = require_github_token(token)?;
+        let fallback = read_token(file.token_file.as_deref(), &file.token)?;
         Ok(Self {
             bind: file.bind,
             interval: parse_duration(&file.interval)?,
             heartbeat_interval: parse_duration(&file.heartbeat_interval)?,
-            github: GitHubConfig {
-                token,
-                owner: file.github.owner,
-                repo: file.github.repo,
-                workflows: validate_workflows(file.github.workflows)?,
-                trusted_branch: file.github.trusted_branch,
-            },
+            sources: resolve_sources(file.github, file.sources, &fallback)?,
             otlp_endpoint: file.otlp.endpoint,
             allowlist_path: file.allowlist,
             ledger_path: file.ledger,
@@ -191,6 +200,69 @@ impl Config {
             archive: archive_from_file(file.archive)?,
         })
     }
+}
+
+/// `github:` and `sources:` describe the same thing, so accepting both would
+/// mean guessing which one the operator meant.
+fn resolve_sources(
+    single: Option<FileSource>,
+    listed: Vec<FileSource>,
+    fallback_token: &str,
+) -> Result<Vec<SourceConfig>> {
+    let files = match (single, listed.is_empty()) {
+        (Some(_), false) => bail!("set either github: or sources:, not both"),
+        (Some(one), true) => vec![one],
+        (None, false) => listed,
+        (None, true) => bail!("at least one source is required under github: or sources:"),
+    };
+
+    let mut sources = Vec::with_capacity(files.len());
+    for file in files {
+        let token = read_token(file.token_file.as_deref(), &file.token)?;
+        let token = if token.is_empty() {
+            fallback_token.to_string()
+        } else {
+            token
+        };
+        let source = SourceConfig {
+            token: require_github_token(token)?,
+            owner: require_field(file.owner, "owner")?,
+            repo: require_field(file.repo, "repo")?,
+            workflows: validate_workflows(file.workflows)?,
+            trusted_branch: require_field(file.trusted_branch, "trusted_branch")?,
+        };
+        // Two entries for one repository would list the same runs twice. The
+        // ledger would absorb it, but only after paying for every extra call.
+        if sources
+            .iter()
+            .any(|existing: &SourceConfig| existing.slug() == source.slug())
+        {
+            bail!(
+                "source {} is configured twice; list its workflows under one entry",
+                source.slug()
+            );
+        }
+        sources.push(source);
+    }
+    Ok(sources)
+}
+
+fn read_token(token_file: Option<&Path>, inline: &str) -> Result<String> {
+    let Some(path) = token_file else {
+        return Ok(inline.trim().to_string());
+    };
+    Ok(std::fs::read_to_string(path)
+        .with_context(|| format!("reading GitHub token from {}", path.display()))?
+        .trim()
+        .to_string())
+}
+
+fn require_field(value: String, field: &str) -> Result<String> {
+    let value = value.trim().to_string();
+    if value.is_empty() {
+        bail!("source {field} must not be empty");
+    }
+    Ok(value)
 }
 
 fn parse_duration(spec: &str) -> Result<Duration> {
@@ -348,5 +420,110 @@ mod tests {
         .unwrap();
         assert_eq!(ready.artifact_prefix, "bench");
         assert_eq!(ready.dir, PathBuf::from("/var/lib/kartero-archive"));
+    }
+
+    fn write_config(body: &str) -> tempfile::NamedTempFile {
+        use std::io::Write;
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(body.as_bytes()).unwrap();
+        file.flush().unwrap();
+        file
+    }
+
+    const TAIL: &str = "
+otlp:
+  endpoint: http://127.0.0.1:4318
+allowlist: /etc/kartero/allowlist.yaml
+ledger: /var/lib/kartero/ledger.sqlite
+";
+
+    #[test]
+    fn a_single_github_block_is_still_one_source() {
+        let file = write_config(&format!(
+            "github:
+  token: t
+  owner: kunobi-ninja
+  repo: kache
+  workflows: [bench.yml]
+{TAIL}"
+        ));
+        let config = Config::from_file(file.path()).unwrap();
+        assert_eq!(config.sources.len(), 1);
+        assert_eq!(config.sources[0].slug(), "kunobi-ninja/kache");
+        assert_eq!(config.sources[0].trusted_branch, "main");
+    }
+
+    #[test]
+    fn sources_carry_their_own_branch_and_fall_back_to_a_shared_token() {
+        let file = write_config(&format!(
+            "token: shared
+sources:
+  - owner: kunobi-ninja
+    repo: kache
+    workflows: [bench.yml]
+  - owner: kunobi-ninja
+    repo: kunobi-frontend
+    workflows: [ci.yaml]
+    trusted_branch: dev
+    token: its-own
+{TAIL}"
+        ));
+        let config = Config::from_file(file.path()).unwrap();
+        assert_eq!(config.sources.len(), 2);
+        assert_eq!(config.sources[0].token, "shared");
+        assert_eq!(config.sources[0].trusted_branch, "main");
+        assert_eq!(config.sources[1].token, "its-own");
+        assert_eq!(config.sources[1].trusted_branch, "dev");
+    }
+
+    #[test]
+    fn github_and_sources_together_are_ambiguous() {
+        let file = write_config(&format!(
+            "token: t
+github:
+  owner: kunobi-ninja
+  repo: kache
+sources:
+  - owner: kunobi-ninja
+    repo: kunobi-frontend
+{TAIL}"
+        ));
+        let error = Config::from_file(file.path()).unwrap_err().to_string();
+        assert!(error.contains("not both"), "{error}");
+    }
+
+    #[test]
+    fn one_repository_may_not_be_listed_twice() {
+        let file = write_config(&format!(
+            "token: t
+sources:
+  - owner: kunobi-ninja
+    repo: kache
+    workflows: [bench.yml]
+  - owner: kunobi-ninja
+    repo: kache
+    workflows: [ci.yml]
+{TAIL}"
+        ));
+        let error = Config::from_file(file.path()).unwrap_err().to_string();
+        assert!(error.contains("configured twice"), "{error}");
+    }
+
+    #[test]
+    fn a_source_without_a_token_anywhere_is_refused() {
+        let file = write_config(&format!(
+            "sources:
+  - owner: kunobi-ninja
+    repo: kache
+{TAIL}"
+        ));
+        assert!(Config::from_file(file.path()).is_err());
+    }
+
+    #[test]
+    fn no_source_at_all_is_refused() {
+        let file = write_config(&format!("token: t{TAIL}"));
+        let error = Config::from_file(file.path()).unwrap_err().to_string();
+        assert!(error.contains("at least one source"), "{error}");
     }
 }
