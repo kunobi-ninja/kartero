@@ -2,14 +2,22 @@ use crate::allowlist::Allowlist;
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
 
+// Structure is bounded by shape; volume is bounded by bytes.
+//
+// There is deliberately no cap on metrics per scope or points per metric. A
+// count is the wrong unit for the thing being protected: `artifact::open`
+// already refuses anything over MAX_JSON_BYTES, and by the time a count could
+// be checked the document is parsed and the memory is spent. A count cap only
+// rejects payloads the byte cap already allowed, which is how a sweep of a
+// week's runs got turned away for being a sweep.
+//
+// The byte cap is not raised to match the collector's 20 MiB default because
+// the constraint here is memory, not the wire: a parsed `Value` is several
+// times the size of its source, and this runs in a 128 MiB container. A
+// producer with more than a few thousand points should write several
+// artifacts rather than one large one.
 const MAX_RESOURCE_METRICS: usize = 4;
 const MAX_SCOPES_PER_RESOURCE: usize = 8;
-const MAX_METRICS_PER_SCOPE: usize = 128;
-// A producer that reports one observation per run carries a point per run, so
-// a weekly sweep is hundreds rather than the handful a single build emits. The
-// zip size cap is the real bound on input; this one only stops a single metric
-// from being pathological.
-const MAX_POINTS_PER_METRIC: usize = 1024;
 const MAX_ATTRIBUTES: usize = 32;
 const MAX_BUCKETS_PER_POINT: usize = 64;
 
@@ -105,9 +113,6 @@ fn filter_scope_metrics(
         let Some(metrics) = scope.get_mut("metrics").and_then(Value::as_array_mut) else {
             continue;
         };
-        if metrics.len() > MAX_METRICS_PER_SCOPE {
-            bail!("scope has too many metrics");
-        }
         let mut kept = Vec::new();
         for metric in metrics.drain(..) {
             let name = metric
@@ -150,9 +155,6 @@ fn filter_points(
     else {
         return Ok(false);
     };
-    if points.len() > MAX_POINTS_PER_METRIC {
-        bail!("metric has too many data points");
-    }
     let mut kept = Vec::new();
     for mut point in points.drain(..) {
         if instrument == "histogram" {
@@ -649,6 +651,39 @@ attribute_values:
             kept[0]["attributes"][0]["value"]["stringValue"],
             "trunk_main"
         );
+    }
+
+    /// A sweep of a week of CI reports a point per attempt, which is
+    /// thousands. The old cap turned that away at 1024 while the byte bound
+    /// would have accepted it.
+    #[test]
+    fn a_sweep_sized_payload_is_not_turned_away_on_count_alone() {
+        let points: Vec<Value> = (0..5_000)
+            .map(|n| {
+                json!({
+                    "asInt": n.to_string(),
+                    "timeUnixNano": "1700000000000000000",
+                    "attributes": [{"key": "branch_class", "value": {"stringValue": "trunk_dev"}}]
+                })
+            })
+            .collect();
+        let body = json!({
+            "resourceMetrics": [{
+                "scopeMetrics": [{
+                    "metrics": [{
+                        "name": "ci.run.attempts",
+                        "sum": {"aggregationTemporality": 1, "dataPoints": points}
+                    }]
+                }]
+            }]
+        });
+        let list = Allowlist::parse(
+            "metrics: [ci.run.attempts]\nattributes: [branch_class]\nprojects: []\n",
+        )
+        .unwrap();
+        let (_, stats) = prepare(&serde_json::to_vec(&body).unwrap(), &list, &envelope()).unwrap();
+        assert_eq!(stats.metrics_kept, 1);
+        assert_eq!(stats.points_dropped, 0);
     }
 
     fn histogram_body(bucket_counts: Vec<Value>, explicit_bounds: Vec<Value>) -> Value {
