@@ -75,7 +75,7 @@ impl Metrics {
         .expect("last collect gauge");
         let sources = IntGauge::new(
             "kartero_sources_configured",
-            "GitHub workflows configured as telemetry sources.",
+            "Repositories configured as telemetry sources.",
         )
         .expect("sources gauge");
         let runs = IntCounterVec::new(

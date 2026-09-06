@@ -57,10 +57,16 @@ spec:
               containerPort: {{ .Values.service.port }}
               protocol: TCP
           env:
-            - name: KARTERO_BIND
-              value: "0.0.0.0:{{ .Values.service.port }}"
             - name: KARTERO_LOG
               value: {{ .Values.logLevel | quote }}
+            {{- if .Values.sources }}
+            # KARTERO_CONFIG wins over every other setting, so the rest of the
+            # collector's configuration comes from the rendered file instead.
+            - name: KARTERO_CONFIG
+              value: {{ printf "%s/kartero.yaml" .Values.config.mountPath | quote }}
+            {{- else }}
+            - name: KARTERO_BIND
+              value: "0.0.0.0:{{ .Values.service.port }}"
             - name: KARTERO_INTERVAL
               value: {{ .Values.interval | quote }}
             - name: KARTERO_HEARTBEAT_INTERVAL
@@ -87,11 +93,13 @@ spec:
                   name: {{ required "github.existingSecret is required" .Values.github.existingSecret | quote }}
                   key: {{ required "github.existingSecretKey is required" .Values.github.existingSecretKey | quote }}
                   optional: false
+            {{- end }}
             {{- if .Values.archive.enabled }}
             {{- if not .Values.archive.path }}{{ fail "archive.path is required when archive.enabled is true" }}{{ end }}
             {{- if and (eq .Values.archive.persistence.type "pvc") (gt (int .Values.replicaCount) 1) }}
             {{- fail "archive.persistence.type=pvc is single-writer: replicaCount must be 1" }}
             {{- end }}
+            {{- if not .Values.sources }}
             - name: KARTERO_ARCHIVE
               value: "true"
             - name: KARTERO_ARCHIVE_ARTIFACT_PREFIX
@@ -101,10 +109,21 @@ spec:
             - name: KARTERO_ARCHIVE_MAX_BYTES
               value: {{ .Values.archive.maxBytes | quote }}
             {{- end }}
+            {{- end }}
           volumeMounts:
             - name: allowlist
               mountPath: {{ .Values.allowlist.mountPath | quote }}
               readOnly: true
+            {{- if .Values.sources }}
+            - name: config
+              mountPath: {{ .Values.config.mountPath | quote }}
+              readOnly: true
+            {{- range $index, $source := .Values.sources }}
+            - name: {{ printf "source-token-%d" $index }}
+              mountPath: {{ printf "/etc/kartero/tokens/%d" $index | quote }}
+              readOnly: true
+            {{- end }}
+            {{- end }}
             - name: ledger
               mountPath: {{ .Values.ledger.persistence.mountPath | quote }}
             {{- if .Values.archive.enabled }}
@@ -129,6 +148,17 @@ spec:
         - name: allowlist
           configMap:
             name: {{ include "kartero.fullname" . }}-allowlist
+        {{- if .Values.sources }}
+        - name: config
+          configMap:
+            name: {{ include "kartero.fullname" . }}-config
+        {{- range $index, $source := .Values.sources }}
+        - name: {{ printf "source-token-%d" $index }}
+          secret:
+            secretName: {{ required "each source needs existingSecret" $source.existingSecret | quote }}
+            optional: false
+        {{- end }}
+        {{- end }}
         - name: ledger
           {{- if eq .Values.ledger.persistence.type "ephemeral" }}
           emptyDir: {}

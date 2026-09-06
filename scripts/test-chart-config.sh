@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# Render the chart with several sources and load the result with the same
+# parser the collector uses.
+#
+# `helm lint` only checks that the templates produce valid YAML. It cannot
+# tell that `max_bytes` rendered in scientific notation, or that a field was
+# named `trustedBranch` where the collector expects `trusted_branch`. Both
+# fail at container start, which is the worst place to find out.
+set -euo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+
+cat >"$work/values.yaml" <<'YAML'
+sources:
+  - owner: kunobi-ninja
+    repo: kache
+    workflows: [bench.yml, ci.yml]
+    trustedBranch: main
+    existingSecret: kartero-github-kache
+    existingSecretKey: token
+  - owner: kunobi-ninja
+    repo: kunobi-frontend
+    workflows: [ci.yaml]
+    trustedBranch: dev
+    existingSecret: kartero-github-kunobi-frontend
+    existingSecretKey: token
+archive:
+  enabled: true
+YAML
+
+helm template kartero "$root/charts/kartero" -f "$work/values.yaml" >"$work/rendered.yaml"
+
+# Pull kartero.yaml out of the ConfigMap and undo the four-space block indent.
+python3 - "$work/rendered.yaml" "$work/kartero.yaml" <<'PY'
+import sys
+
+rendered, out = sys.argv[1], sys.argv[2]
+lines = open(rendered).read().splitlines()
+start = next(i for i, line in enumerate(lines) if line.strip() == 'kartero.yaml: |')
+body = []
+for line in lines[start + 1:]:
+    if line and not line.startswith('    '):
+        break
+    body.append(line[4:])
+open(out, 'w').write('\n'.join(body) + '\n')
+PY
+
+# The rendered config points at Secret mounts that only exist in a pod. Swap
+# the root for a directory holding stand-in tokens: the shape under test is the
+# wiring, not the secret material.
+mkdir -p "$work/tokens/0" "$work/tokens/1"
+echo "token-a" >"$work/tokens/0/token"
+echo "token-b" >"$work/tokens/1/token"
+sed -i.bak "s#/etc/kartero/tokens#$work/tokens#g" "$work/kartero.yaml"
+
+output="$(cd "$root" && KARTERO_CONFIG="$work/kartero.yaml" cargo run --quiet -- config-check)"
+echo "$output"
+
+for expected in \
+  "source kunobi-ninja/kache branch=main workflows=bench.yml,ci.yml token=present" \
+  "source kunobi-ninja/kunobi-frontend branch=dev workflows=ci.yaml token=present" \
+  "archive=true"; do
+  if ! grep -qF "$expected" <<<"$output"; then
+    echo "rendered chart config did not resolve as expected: $expected" >&2
+    exit 1
+  fi
+done
+
+echo "chart config loads"

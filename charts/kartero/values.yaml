@@ -28,6 +28,31 @@ github:
   existingSecret: kartero-github
   existingSecretKey: token
 
+# Several repositories in one collector. Leave empty to use the single `github`
+# block above; set it and `github` is ignored except for `artifactPrefix`.
+#
+# One instance means one ledger and one allowlist covering every source. That
+# is the point: a second Deployment would need a second PVC, a second token to
+# rotate and a second thing to watch. The allowlist stays global, so a metric
+# name admitted for one repository is admitted for all of them.
+#
+# Each source needs its own Secret. A fine-grained token is scoped to the
+# repositories it was minted for, so one token covering several is a decision
+# about blast radius rather than a default.
+sources: []
+#  - owner: kunobi-ninja
+#    repo: kache
+#    workflows: [bench.yml, ci.yml]
+#    trustedBranch: main
+#    existingSecret: kartero-github-kache
+#    existingSecretKey: token
+#  - owner: kunobi-ninja
+#    repo: kunobi-frontend
+#    workflows: [ci.yaml]
+#    trustedBranch: dev
+#    existingSecret: kartero-github-kunobi-frontend
+#    existingSecretKey: token
+
 otlp:
   # In-cluster SigNoz collector. Override per environment.
   endpoint: http://signoz-otel-collector.signoz.svc.cluster.local:4318
@@ -62,6 +87,11 @@ ledger:
 
 allowlist:
   mountPath: /etc/kartero
+
+# Where the rendered collector config lands when `sources` is set. Unused
+# otherwise.
+config:
+  mountPath: /etc/kartero/config
 
 service:
   type: ClusterIP

@@ -5,7 +5,7 @@
 //! files under a configured directory (a cluster PVC). Does not parse
 //! OTLP, talk to object storage, or write to SigNoz.
 
-use crate::config::{ArchiveConfig, Config};
+use crate::config::{ArchiveConfig, Config, SourceConfig};
 use crate::github::{self, ArtifactRef, GitHub, WorkflowRun};
 use crate::ledger::{ArchiveKey, ArchiveStatus, Ledger};
 use crate::metrics::Metrics;
@@ -53,16 +53,35 @@ async fn archive_inner(
     std::fs::create_dir_all(&archive.dir)
         .with_context(|| format!("creating archive dir {}", archive.dir.display()))?;
     let ledger = Ledger::open(&config.ledger_path)?;
-    let github = GitHub::new(config.github.clone())?;
+    let mut failed = Vec::new();
+    for source in &config.sources {
+        if let Err(err) = archive_source(archive, source, &ledger, snapshot).await {
+            warn!(source = %source.slug(), error = %err, "archiving source failed");
+            failed.push(source.slug());
+        }
+    }
+    if !failed.is_empty() {
+        bail!("archive failed for {}", failed.join(", "));
+    }
+    Ok(())
+}
+
+async fn archive_source(
+    archive: &ArchiveConfig,
+    source: &SourceConfig,
+    ledger: &Ledger,
+    snapshot: &mut ArchiveSnapshot,
+) -> Result<()> {
+    let github = GitHub::new(source.clone())?;
     let runs = match github.list_completed_runs().await {
         Ok(runs) => runs,
         Err(err) => {
             snapshot.github_errors += 1;
-            warn!(error = %err, "archive: listing completed GitHub workflow runs failed");
+            warn!(source = %source.slug(), error = %err, "archive: listing completed GitHub workflow runs failed");
             return Err(err);
         }
     };
-    snapshot.runs_seen = runs.len() as u64;
+    snapshot.runs_seen += runs.len() as u64;
     let mut had_errors = false;
     for run in runs {
         if !github.trusted(&run) {
@@ -72,7 +91,7 @@ async fn archive_inner(
         let artifacts = match github.list_artifacts(run.run_id).await {
             Ok(list) => list,
             Err(err) => {
-                warn!(run_id = run.run_id, error = %err, "archive: listing artifacts failed");
+                warn!(source = %source.slug(), run_id = run.run_id, error = %err, "archive: listing artifacts failed");
                 snapshot.github_errors += 1;
                 had_errors = true;
                 continue;
@@ -85,9 +104,10 @@ async fn archive_inner(
             }
             snapshot.artifacts_matched += 1;
             if let Err(err) =
-                archive_one(config, archive, &ledger, &github, snapshot, &run, &artifact).await
+                archive_one(archive, source, ledger, &github, snapshot, &run, &artifact).await
             {
                 warn!(
+                    source = %source.slug(),
                     run_id = run.run_id,
                     artifact = %artifact.name,
                     error = %err,
@@ -112,8 +132,8 @@ fn record_artifact(snapshot: &mut ArchiveSnapshot, outcome: &str) {
 
 #[allow(clippy::too_many_arguments)]
 async fn archive_one(
-    config: &Config,
     archive: &ArchiveConfig,
+    source: &SourceConfig,
     ledger: &Ledger,
     github: &GitHub,
     snapshot: &mut ArchiveSnapshot,
@@ -149,8 +169,8 @@ async fn archive_one(
     }
 
     let relative = relative_path(
-        &config.github.owner,
-        &config.github.repo,
+        &source.owner,
+        &source.repo,
         run.run_id,
         run.attempt,
         &artifact.name,
@@ -225,20 +245,18 @@ fn sanitize_artifact_name(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::GitHubConfig;
-
     fn config_disabled() -> Config {
         Config {
             bind: "127.0.0.1:0".into(),
             interval: Duration::from_secs(3600),
             heartbeat_interval: Duration::from_secs(60),
-            github: GitHubConfig {
+            sources: vec![SourceConfig {
                 token: "token".into(),
                 owner: "kunobi-ninja".into(),
                 repo: "kache".into(),
                 workflows: vec!["bench.yml".into()],
                 trusted_branch: "main".into(),
-            },
+            }],
             otlp_endpoint: "http://127.0.0.1:4318".into(),
             allowlist_path: "/etc/kartero/allowlist.yaml".into(),
             ledger_path: "/tmp/ledger.sqlite".into(),

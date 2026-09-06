@@ -15,9 +15,27 @@ The artifact boundary keeps OTLP credentials out of GitHub Actions. Producers
 cannot choose arbitrary metric names or repository attributes because the
 collector filters and stamps them before delivery.
 
-The current collector watches one GitHub repository and multiple workflow files.
-Run another Kartero instance for another repository until multi-source support is
-added.
+## Sources
+
+One collector watches several repositories. Each source names its own owner,
+repo, workflow list, trusted branch and token. A source that fails is reported
+and stepped over rather than stopping the ones after it: an expired token on
+one repository must not quietly halt collection for the rest.
+
+One instance keeps one ledger and one allowlist. The ledger key already
+includes the repository, so two sources cannot collide in it. The allowlist
+stays global — a metric name admitted for one repository is admitted for all of
+them, which is one review rather than several, and is worth splitting only if
+two sources ever need genuinely different surfaces.
+
+Each source carries its own token, because a fine-grained token is scoped to
+the repositories it was minted for. One token covering several is a decision
+about blast radius rather than a default.
+
+Environment variables describe a single source. Several need `KARTERO_CONFIG`,
+since per-source tokens and branches have no flat environment form that does
+not invent an index convention. The Helm chart renders that file when `sources`
+is set.
 
 Kartero runs as a Deployment. One replica owns one SQLite ledger. The Helm chart
 uses a `Recreate` strategy with PVC storage to preserve that single-writer model.

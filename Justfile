@@ -43,6 +43,10 @@ bootstrap-npm:
 helm-lint:
   helm lint charts/kartero
 
+[group('deploy')]
+chart-config-test:
+  ./scripts/test-chart-config.sh
+
 [group('docker')]
 docker:
   docker buildx bake -f docker-bake.hcl --load
