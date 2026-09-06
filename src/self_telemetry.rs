@@ -38,6 +38,8 @@ pub struct CollectSnapshot {
     /// Sources whose listing failed for a reason waiting will not fix.
     pub sources_misconfigured: u64,
     pub source_status: Vec<SourceStatus>,
+    /// `(source, unix seconds)` for tokens that expire.
+    pub token_expiry: Vec<(String, i64)>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -103,6 +105,7 @@ pub fn serialize(snapshot: &CollectSnapshot) -> Value {
                     gauge("kartero.collect.sources", "{source}", vec![as_int(snapshot.sources, &time, &run_attrs)]),
                     gauge("kartero.collect.sources_misconfigured", "{source}", vec![as_int(snapshot.sources_misconfigured, &time, &run_attrs)]),
                     gauge("kartero.collect.source_up", "1", source_points(snapshot, &time)),
+                    gauge("kartero.collect.source_token_expires", "s", token_expiry_points(snapshot, &time)),
                     gauge("kartero.collect.runs", "{run}", vec![
                         as_int(snapshot.runs_seen, &time, &[str_attr("kartero.run.state", "seen")]),
                         as_int(snapshot.runs_trusted, &time, &[str_attr("kartero.run.state", "trusted")]),
@@ -285,6 +288,20 @@ fn source_points(snapshot: &CollectSnapshot, time: &str) -> Vec<Value> {
         .collect()
 }
 
+fn token_expiry_points(snapshot: &CollectSnapshot, time: &str) -> Vec<Value> {
+    snapshot
+        .token_expiry
+        .iter()
+        .map(|(slug, expires)| {
+            as_int(
+                (*expires).max(0) as u64,
+                time,
+                &[str_attr("kartero.source", slug)],
+            )
+        })
+        .collect()
+}
+
 fn gauge(name: &str, unit: &str, data_points: Vec<Value>) -> Value {
     json!({ "name": name, "unit": unit, "gauge": { "dataPoints": data_points } })
 }
@@ -330,6 +347,7 @@ mod tests {
                 },
             ],
             sources_misconfigured: 1,
+            token_expiry: vec![("Zondax/kunobi-frontend".into(), 1_820_322_862)],
             runs_seen: 10,
             runs_trusted: 2,
             artifacts_seen: 4,
@@ -359,6 +377,7 @@ mod tests {
         assert!(names.contains(&"kartero.collect.sources"));
         assert!(names.contains(&"kartero.collect.source_up"));
         assert!(names.contains(&"kartero.collect.sources_misconfigured"));
+        assert!(names.contains(&"kartero.collect.source_token_expires"));
         assert!(names.contains(&"kartero.collect.errors"));
         let dumped = body.to_string();
         assert!(!dumped.contains("cicd."));

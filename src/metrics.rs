@@ -19,6 +19,7 @@ pub struct Metrics {
     collect_errors: IntCounterVec,
     source_up: IntGaugeVec,
     source_listing_failures: IntCounterVec,
+    source_token_expires: IntGaugeVec,
     archive_artifacts: IntCounterVec,
     archive_passes: IntCounterVec,
     archive_duration: Histogram,
@@ -122,6 +123,20 @@ impl Metrics {
             &["source", "kind"],
         )
         .expect("source listing failures counter");
+        // An absolute instant rather than a countdown: a "seconds remaining"
+        // gauge is wrong the moment scraping stops, and right only by
+        // accident. Alert with `- time()`.
+        let source_token_expires = IntGaugeVec::new(
+            opts!(
+                "kartero_source_token_expires_timestamp_seconds",
+                "Unix time at which a source's token expires. Absent when the token does not expire."
+            ),
+            &["source"],
+        )
+        .expect("token expiry gauge");
+        registry
+            .register(Box::new(source_token_expires.clone()))
+            .expect("register token expiry");
         registry
             .register(Box::new(source_up.clone()))
             .expect("register source up");
@@ -242,6 +257,7 @@ impl Metrics {
             collect_errors,
             source_up,
             source_listing_failures,
+            source_token_expires,
             archive_artifacts,
             archive_passes,
             archive_duration,
@@ -256,6 +272,12 @@ impl Metrics {
         self.source_up
             .with_label_values(&[source])
             .set(i64::from(up));
+    }
+
+    pub fn set_source_token_expiry(&self, source: &str, expires_unix: i64) {
+        self.source_token_expires
+            .with_label_values(&[source])
+            .set(expires_unix);
     }
 
     pub fn inc_source_listing_failure(&self, source: &str, kind: &str) {

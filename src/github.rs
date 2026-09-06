@@ -1,7 +1,14 @@
 use crate::config::SourceConfig;
 use anyhow::{Context, Result};
 use serde::Deserialize;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::Duration;
+
+/// GitHub reports a token's expiry on every response that uses it, as
+/// `github-authentication-token-expiration`. The header is absent for tokens
+/// that never expire, which is a real and separate answer rather than a
+/// missing one.
+const TOKEN_EXPIRY_HEADER: &str = "github-authentication-token-expiration";
 
 #[derive(Debug, Clone)]
 pub struct WorkflowRun {
@@ -29,6 +36,8 @@ pub struct ArtifactRef {
 pub struct GitHub {
     client: reqwest::Client,
     config: SourceConfig,
+    /// Unix seconds, or 0 when this token has no expiry or none was seen yet.
+    token_expires_unix: AtomicI64,
 }
 
 /// A source failure that waiting will not fix.
@@ -46,11 +55,75 @@ pub enum SourceFailure {
         repo: String,
         workflow: String,
     },
+    #[error("{owner}/{repo} returned 401: this source's token has expired or been revoked")]
+    Unauthorized { owner: String, repo: String },
+    #[error(
+        "{owner}/{repo} returned 403: this source's token is refused — an organisation approval or a permission has been withdrawn"
+    )]
+    Forbidden { owner: String, repo: String },
+}
+
+impl SourceFailure {
+    /// The `kind` label on `kartero_source_listing_failures_total`.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::NotFound { .. } => "not_found",
+            Self::Unauthorized { .. } => "unauthorized",
+            Self::Forbidden { .. } => "forbidden",
+        }
+    }
 }
 
 /// Whether an error is one that waiting cannot fix.
-pub fn is_permanent(error: &anyhow::Error) -> bool {
-    error.downcast_ref::<SourceFailure>().is_some()
+pub fn permanent_kind(error: &anyhow::Error) -> Option<&'static str> {
+    error
+        .downcast_ref::<SourceFailure>()
+        .map(SourceFailure::kind)
+}
+
+/// A 403 carrying an exhausted quota is a rate limit, not a refusal.
+fn is_rate_limited(headers: &reqwest::header::HeaderMap) -> bool {
+    headers
+        .get("x-ratelimit-remaining")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse::<i64>().ok())
+        .is_some_and(|remaining| remaining <= 0)
+        || headers.contains_key("retry-after")
+}
+
+/// `2027-09-07 13:14:22 UTC`, the only shape GitHub sends.
+///
+/// Parsed by hand rather than by pulling in a date library for one header:
+/// the format is fixed, and anything that does not match it is treated as no
+/// expiry rather than guessed at.
+pub fn parse_token_expiry(raw: &str) -> Option<i64> {
+    let raw = raw.trim().strip_suffix(" UTC")?;
+    let (date, time) = raw.split_once(' ')?;
+    let mut date = date.split('-');
+    let year: i64 = date.next()?.parse().ok()?;
+    let month: i64 = date.next()?.parse().ok()?;
+    let day: i64 = date.next()?.parse().ok()?;
+    if date.next().is_some() {
+        return None;
+    }
+    let mut time = time.split(':');
+    let hour: i64 = time.next()?.parse().ok()?;
+    let minute: i64 = time.next()?.parse().ok()?;
+    let second: i64 = time.next()?.parse().ok()?;
+    if time.next().is_some() || !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return None;
+    }
+    Some(days_from_civil(year, month, day) * 86_400 + hour * 3_600 + minute * 60 + second)
+}
+
+/// Howard Hinnant's civil-date algorithm: days since 1970-01-01.
+fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+    let year = year - i64::from(month <= 2);
+    let era = if year >= 0 { year } else { year - 399 } / 400;
+    let year_of_era = year - era * 400;
+    let day_of_year = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    era * 146_097 + day_of_era - 719_468
 }
 
 pub fn is_trusted(event: &str, head_branch: &str, trusted_branch: &str) -> bool {
@@ -88,7 +161,11 @@ impl GitHub {
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(60))
             .build()?;
-        Ok(Self { client, config })
+        Ok(Self {
+            client,
+            config,
+            token_expires_unix: AtomicI64::new(0),
+        })
     }
 
     pub fn trusted(&self, run: &WorkflowRun) -> bool {
@@ -103,17 +180,9 @@ impl GitHub {
                 self.config.owner, self.config.repo
             );
             let response = self.client.get(url).send().await?;
-            // GitHub answers 404 rather than 403 for a private repository a
-            // token cannot see, so as not to leak existence. That means a
-            // missing grant is indistinguishable from a missing workflow file,
-            // and neither improves by retrying.
-            if response.status() == reqwest::StatusCode::NOT_FOUND {
-                return Err(SourceFailure::NotFound {
-                    owner: self.config.owner.clone(),
-                    repo: self.config.repo.clone(),
-                    workflow: workflow.clone(),
-                }
-                .into());
+            self.record_token_expiry(response.headers());
+            if let Some(failure) = self.classify(response.status(), response.headers(), workflow) {
+                return Err(failure.into());
             }
             let body: RunsResponse = response
                 .error_for_status()?
@@ -193,6 +262,55 @@ impl GitHub {
         Ok(bytes)
     }
 
+    /// Statuses that mean the configuration is wrong rather than the moment.
+    ///
+    /// GitHub answers 404 rather than 403 for a private repository a token
+    /// cannot see, so as not to leak existence: a missing grant and a missing
+    /// workflow file look identical. 401 is an expired or revoked token. 403
+    /// is a withdrawn approval or permission — except when it is a secondary
+    /// rate limit, which is emphatically temporary and is told apart by the
+    /// remaining-quota header. Calling a rate limit permanent would flip a
+    /// healthy source to misconfigured during a busy hour.
+    fn classify(
+        &self,
+        status: reqwest::StatusCode,
+        headers: &reqwest::header::HeaderMap,
+        workflow: &str,
+    ) -> Option<SourceFailure> {
+        let owner = self.config.owner.clone();
+        let repo = self.config.repo.clone();
+        match status {
+            reqwest::StatusCode::NOT_FOUND => Some(SourceFailure::NotFound {
+                owner,
+                repo,
+                workflow: workflow.to_string(),
+            }),
+            reqwest::StatusCode::UNAUTHORIZED => Some(SourceFailure::Unauthorized { owner, repo }),
+            reqwest::StatusCode::FORBIDDEN if !is_rate_limited(headers) => {
+                Some(SourceFailure::Forbidden { owner, repo })
+            }
+            _ => None,
+        }
+    }
+
+    fn record_token_expiry(&self, headers: &reqwest::header::HeaderMap) {
+        let parsed = headers
+            .get(TOKEN_EXPIRY_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .and_then(parse_token_expiry)
+            .unwrap_or(0);
+        self.token_expires_unix.store(parsed, Ordering::Relaxed);
+    }
+
+    /// Unix seconds at which this source's token expires, if GitHub said so.
+    /// `None` means the token does not expire, or has not been used yet.
+    pub fn token_expires_unix(&self) -> Option<i64> {
+        match self.token_expires_unix.load(Ordering::Relaxed) {
+            0 => None,
+            seconds => Some(seconds),
+        }
+    }
+
     pub fn repository_url(&self) -> String {
         format!(
             "https://github.com/{}/{}",
@@ -251,23 +369,91 @@ mod tests {
     }
 
     #[test]
-    fn a_404_is_permanent_and_says_what_to_check() {
-        let err: anyhow::Error = SourceFailure::NotFound {
-            owner: "Zondax".into(),
-            repo: "kunobi-frontend".into(),
-            workflow: "ci.yaml".into(),
+    fn permanent_failures_carry_a_kind_and_say_what_to_check() {
+        let cases: [(SourceFailure, &str); 3] = [
+            (
+                SourceFailure::NotFound {
+                    owner: "Zondax".into(),
+                    repo: "kunobi-frontend".into(),
+                    workflow: "ci.yaml".into(),
+                },
+                "not_found",
+            ),
+            (
+                SourceFailure::Unauthorized {
+                    owner: "Zondax".into(),
+                    repo: "kunobi-frontend".into(),
+                },
+                "unauthorized",
+            ),
+            (
+                SourceFailure::Forbidden {
+                    owner: "Zondax".into(),
+                    repo: "kunobi-frontend".into(),
+                },
+                "forbidden",
+            ),
+        ];
+        for (failure, kind) in cases {
+            let err: anyhow::Error = failure.into();
+            assert_eq!(permanent_kind(&err), Some(kind));
+            let text = err.to_string();
+            assert!(text.contains("Zondax/kunobi-frontend"), "{text}");
+            assert!(text.contains("token"), "{text}");
         }
-        .into();
-        assert!(is_permanent(&err));
-        let text = err.to_string();
-        assert!(text.contains("Zondax/kunobi-frontend"), "{text}");
-        assert!(text.contains("token"), "{text}");
     }
 
     #[test]
     fn an_ordinary_failure_is_not_permanent() {
         let err = anyhow::anyhow!("connection reset");
-        assert!(!is_permanent(&err));
+        assert!(permanent_kind(&err).is_none());
+    }
+
+    /// A 403 from an exhausted quota is temporary. Calling it permanent would
+    /// flip a healthy source to misconfigured during a busy hour.
+    #[test]
+    fn a_rate_limited_403_is_not_a_refusal() {
+        let mut limited = reqwest::header::HeaderMap::new();
+        limited.insert("x-ratelimit-remaining", "0".parse().unwrap());
+        assert!(is_rate_limited(&limited));
+
+        let mut retry = reqwest::header::HeaderMap::new();
+        retry.insert("retry-after", "60".parse().unwrap());
+        assert!(is_rate_limited(&retry));
+
+        let mut healthy = reqwest::header::HeaderMap::new();
+        healthy.insert("x-ratelimit-remaining", "4931".parse().unwrap());
+        assert!(!is_rate_limited(&healthy));
+        assert!(!is_rate_limited(&reqwest::header::HeaderMap::new()));
+    }
+
+    /// The exact header GitHub returned for the kunobi-frontend token.
+    #[test]
+    fn token_expiry_header_parses_to_unix_seconds() {
+        assert_eq!(
+            parse_token_expiry("2027-09-07 13:14:22 UTC"),
+            Some(1_820_322_862)
+        );
+        assert_eq!(parse_token_expiry("1970-01-01 00:00:00 UTC"), Some(0));
+        assert_eq!(
+            parse_token_expiry("2024-02-29 00:00:00 UTC"),
+            Some(1709164800)
+        );
+    }
+
+    /// Anything unrecognised means no expiry rather than a guessed one.
+    #[test]
+    fn an_unparseable_expiry_is_not_invented() {
+        for raw in [
+            "",
+            "never",
+            "2027-09-07 13:14:22",
+            "2027-09-07T13:14:22 UTC",
+            "2027-13-07 13:14:22 UTC",
+            "2027-09-07 13:14 UTC",
+        ] {
+            assert_eq!(parse_token_expiry(raw), None, "{raw:?} must not parse");
+        }
     }
 
     #[test]

@@ -88,7 +88,12 @@ async fn collect_source(
     snapshot: &mut CollectSnapshot,
 ) -> Result<()> {
     let github = GitHub::new(source.clone())?;
-    let runs = match github.list_completed_runs().await {
+    let listed = github.list_completed_runs().await;
+    // Recorded whatever the outcome: GitHub reports the expiry on every
+    // response that carries the token, and knowing a token is days from
+    // lapsing is most useful while it still works.
+    record_token_expiry(metrics, snapshot, source, &github);
+    let runs = match listed {
         Ok(runs) => runs,
         Err(err) => {
             snapshot.github_errors += 1;
@@ -97,15 +102,15 @@ async fn collect_source(
             // it stays unnoticed: every pass looks like the last, and the
             // artifact counters sit at zero, which is indistinguishable from a
             // repository that has nothing to collect yet.
-            if github::is_permanent(&err) {
-                metrics.inc_source_listing_failure(&source.slug(), "not_found");
+            if let Some(kind) = github::permanent_kind(&err) {
+                metrics.inc_source_listing_failure(&source.slug(), kind);
                 snapshot.sources_misconfigured += 1;
                 error!(
                     source = %source.slug(),
+                    kind,
                     trusted_branch = %source.trusted_branch,
                     error = %err,
-                    "source is misconfigured and will not recover without a change; \
-                     check that the token in this source's secret can see the repository"
+                    "source will not recover without a change; check this source's token"
                 );
             } else {
                 metrics.inc_source_listing_failure(&source.slug(), "other");
@@ -158,6 +163,21 @@ async fn collect_source(
         bail!("one or more artifact operations failed");
     }
     Ok(())
+}
+
+/// Absent means the token does not expire, which is a real answer rather than
+/// a missing one, so no series is written for it.
+fn record_token_expiry(
+    metrics: &Metrics,
+    snapshot: &mut CollectSnapshot,
+    source: &SourceConfig,
+    github: &GitHub,
+) {
+    let Some(expires) = github.token_expires_unix() else {
+        return;
+    };
+    metrics.set_source_token_expiry(&source.slug(), expires);
+    snapshot.token_expiry.push((source.slug(), expires));
 }
 
 fn record_artifact(metrics: &Metrics, snapshot: &mut CollectSnapshot, outcome: &str) {
