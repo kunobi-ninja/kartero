@@ -50,6 +50,22 @@
             "items": { "type": "string", "minLength": 1 }
           },
           "trustedBranch": { "type": "string", "minLength": 1 },
+          "actions": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "gateJob": { "type": "string", "minLength": 1 },
+              "guardJob": { "type": "string", "minLength": 1 },
+              "guardStep": { "type": "string", "minLength": 1 },
+              "filterJob": { "type": "string", "minLength": 1 },
+              "docsJob": { "type": "string", "minLength": 1 },
+              "branchClasses": { "type": "object", "additionalProperties": { "type": "string", "minLength": 1 } },
+              "jobAliases": { "type": "object", "additionalProperties": { "type": "string", "minLength": 1 } },
+              "canonicalJobs": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+              "excludedWorkflows": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+            },
+            "required": ["gateJob", "guardJob", "guardStep", "filterJob", "docsJob"]
+          },
           "existingSecret": { "type": "string", "minLength": 1 },
           "existingSecretKey": { "type": "string", "minLength": 1 }
         },
