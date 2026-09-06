@@ -88,7 +88,7 @@ async fn collect_source(
     snapshot: &mut CollectSnapshot,
 ) -> Result<()> {
     let github = GitHub::new(source.clone())?;
-    let listed = github.list_completed_runs().await;
+    let listed = github.list_completed_runs(config.lookback).await;
     // Recorded whatever the outcome: GitHub reports the expiry on every
     // response that carries the token, and knowing a token is days from
     // lapsing is most useful while it still works.

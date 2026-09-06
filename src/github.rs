@@ -81,6 +81,13 @@ impl SourceFailure {
     }
 }
 
+/// How many pages of runs one workflow may contribute per pass.
+///
+/// A hundred per page, so a busy repository is covered for hours while a
+/// misconfigured lookback cannot walk a repository's whole history in one
+/// pass and spend the hourly rate budget doing it.
+const MAX_RUN_PAGES: u32 = 20;
+
 /// Whether an error is one that waiting cannot fix.
 pub fn permanent_kind(error: &anyhow::Error) -> Option<&'static str> {
     error
@@ -179,54 +186,75 @@ impl GitHub {
         is_trusted(&run.event, &run.head_branch, &self.config.trusted_branch)
     }
 
-    pub async fn list_completed_runs(&self) -> Result<Vec<WorkflowRun>> {
+    /// Completed runs of every configured workflow, back to `lookback`.
+    ///
+    /// Paged and date-bounded rather than "the most recent 30". Thirty runs is
+    /// a window whose width depends on how busy the repository is: it covers
+    /// about ten hours on kunobi-frontend at rest and a few minutes during a
+    /// burst of pushes, so it silently narrows exactly when there is most to
+    /// collect. `created` bounds the window in time instead, which is the unit
+    /// the collect interval is expressed in.
+    pub async fn list_completed_runs(&self, lookback: Duration) -> Result<Vec<WorkflowRun>> {
         let mut completed = Vec::new();
+        let since = utc_date_days_ago(lookback);
         for workflow in &self.config.workflows {
-            let url = format!(
-                "https://api.github.com/repos/{}/{}/actions/workflows/{workflow}/runs?status=completed&per_page=30",
-                self.config.owner, self.config.repo
-            );
-            let response = self.client.get(url).send().await?;
-            self.record_token_expiry(response.headers());
-            if let Some(failure) = self.classify(response.status(), response.headers(), workflow) {
-                return Err(failure.into());
-            }
-            let body: RunsResponse = response
-                .error_for_status()?
-                .json()
-                .await
-                .with_context(|| format!("listing workflow runs for {workflow}"))?;
-            completed.extend(body.workflow_runs.into_iter().map(|run| {
-                let head_branch = run.head_branch.clone().unwrap_or_default();
-                let observed_at = crate::actions::classify::parse_rfc3339(&run.updated_at)
-                    .or_else(|| crate::actions::classify::parse_rfc3339(&run.run_started_at))
-                    .unwrap_or_default();
-                WorkflowRun {
-                    detail: crate::actions::RunAttempt {
-                        id: run.id,
-                        run_attempt: run.run_attempt,
-                        event: run.event.clone(),
-                        status: run.status,
-                        conclusion: run.conclusion.clone(),
-                        created_at: run.created_at,
-                        run_started_at: run.run_started_at,
-                        path: run.path,
-                        head_branch: run.head_branch,
-                        repository: crate::actions::model::Repository {
-                            full_name: run.repository.full_name,
-                        },
-                    },
-                    observed_at,
-                    repo_id: run.repository.id,
-                    run_id: run.id,
-                    attempt: run.run_attempt,
-                    event: run.event,
-                    head_branch,
-                    workflow_id: run.workflow_id,
-                    workflow_name: run.name.unwrap_or_else(|| workflow.clone()),
-                    conclusion: run.conclusion,
+            for page in 1..=MAX_RUN_PAGES {
+                let url = format!(
+                    "https://api.github.com/repos/{}/{}/actions/workflows/{workflow}/runs\
+                     ?status=completed&per_page=100&page={page}&created=%3E%3D{since}",
+                    self.config.owner, self.config.repo
+                );
+                let response = self.client.get(url).send().await?;
+                self.record_token_expiry(response.headers());
+                if let Some(failure) =
+                    self.classify(response.status(), response.headers(), workflow)
+                {
+                    return Err(failure.into());
                 }
-            }));
+                let body: RunsResponse = response
+                    .error_for_status()?
+                    .json()
+                    .await
+                    .with_context(|| format!("listing workflow runs for {workflow}"))?;
+                let count = body.workflow_runs.len();
+                completed.extend(body.workflow_runs.into_iter().map(|run| {
+                    let head_branch = run.head_branch.clone().unwrap_or_default();
+                    let observed_at = crate::actions::classify::parse_rfc3339(&run.updated_at)
+                        .or_else(|| crate::actions::classify::parse_rfc3339(&run.run_started_at))
+                        .unwrap_or_default();
+                    WorkflowRun {
+                        detail: crate::actions::RunAttempt {
+                            id: run.id,
+                            run_attempt: run.run_attempt,
+                            event: run.event.clone(),
+                            status: run.status,
+                            conclusion: run.conclusion.clone(),
+                            created_at: run.created_at,
+                            run_started_at: run.run_started_at,
+                            path: run.path,
+                            head_branch: run.head_branch,
+                            repository: crate::actions::model::Repository {
+                                full_name: run.repository.full_name,
+                            },
+                        },
+                        observed_at,
+                        repo_id: run.repository.id,
+                        run_id: run.id,
+                        attempt: run.run_attempt,
+                        event: run.event,
+                        head_branch,
+                        workflow_id: run.workflow_id,
+                        workflow_name: run.name.unwrap_or_else(|| workflow.clone()),
+                        conclusion: run.conclusion,
+                    }
+                }));
+                // A short page is the last one. The listing endpoint also
+                // stops at a thousand runs per query and signals it with an
+                // empty page rather than an error.
+                if count < 100 {
+                    break;
+                }
+            }
         }
         completed.sort_unstable_by_key(|run| std::cmp::Reverse(run.run_id));
         Ok(completed)
@@ -259,11 +287,6 @@ impl GitHub {
             .collect())
     }
 
-    /// Every job of one attempt, paged.
-    ///
-    /// `filter=latest` would return only the newest attempt's jobs, which is
-    /// wrong for a rerun: the carried-forward jobs are exactly what tells a
-    /// partial rerun from a full one.
     pub async fn list_jobs(
         &self,
         run_id: i64,
@@ -380,6 +403,35 @@ impl GitHub {
             self.config.owner, self.config.repo
         )
     }
+}
+
+/// `YYYY-MM-DD`, the shape GitHub's `created` filter takes.
+///
+/// A whole day of slack on purpose: the filter is inclusive at day
+/// granularity, so a lookback of an hour still asks for today and yesterday
+/// rather than risking a boundary that drops the run it was looking for.
+fn utc_date_days_ago(lookback: Duration) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let days = (now.saturating_sub(lookback.as_secs()) / 86_400) as i64;
+    let (year, month, day) = civil_from_days(days);
+    format!("{year:04}-{month:02}-{day:02}")
+}
+
+/// Howard Hinnant's algorithm, the inverse of the one in `actions::classify`.
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    (y + i64::from(m <= 2), m as u32, d as u32)
 }
 
 #[derive(Debug, Deserialize)]
@@ -534,6 +586,29 @@ mod tests {
     #[test]
     fn pull_requests_are_never_trusted() {
         assert!(!is_trusted("pull_request", "main", "main"));
+    }
+
+    /// The date the `created` filter asks for, so a boundary cannot silently
+    /// drop the run the pass was looking for.
+    #[test]
+    fn the_listing_window_reaches_back_at_least_the_lookback() {
+        let today = utc_date_days_ago(Duration::from_secs(0));
+        let yesterday = utc_date_days_ago(Duration::from_secs(3600));
+        // An hour's lookback still asks for yesterday: the filter is inclusive
+        // at day granularity, and a run at 00:05 must not fall outside it.
+        assert!(
+            yesterday <= today,
+            "{yesterday} should not be after {today}"
+        );
+        let week = utc_date_days_ago(Duration::from_secs(7 * 86_400));
+        assert!(week < today, "a week back must precede today");
+    }
+
+    #[test]
+    fn civil_dates_round_trip_against_known_instants() {
+        assert_eq!(civil_from_days(0), (1970, 1, 1));
+        assert_eq!(civil_from_days(19_782), (2024, 2, 29));
+        assert_eq!(civil_from_days(20_733), (2026, 10, 7));
     }
 
     #[test]
