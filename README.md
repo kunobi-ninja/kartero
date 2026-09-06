@@ -14,7 +14,7 @@ The public npm package accepts Istanbul summary JSON, LLVM coverage export JSON,
 and LCOV. It does not need credentials or network access.
 
 ```bash
-npx --yes @kunobi/kartero@0.4.1 coverage \
+npx --yes @kunobi/kartero@0.4.2 coverage \
   --input coverage/coverage-summary.json \
   --output telemetry
 ```
@@ -24,7 +24,7 @@ with `telemetry-otlp-v1`:
 
 ```yaml
 - if: always()
-  run: npx --yes @kunobi/kartero@0.4.1 coverage \
+  run: npx --yes @kunobi/kartero@0.4.2 coverage \
     --input coverage/coverage-summary.json --output telemetry
 - if: always()
   uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
@@ -44,7 +44,7 @@ full result on success. If the command fails, the fallback remains available to
 the final `if: always()` upload step.
 
 ```bash
-npx --yes @kunobi/kartero@0.4.1 gauge \
+npx --yes @kunobi/kartero@0.4.2 gauge \
   --name kache.bench.verdict.ok \
   --value 0 \
   --attribute kache.bench.project=bench-firefox \
@@ -78,7 +78,7 @@ Secret, commonly managed by External Secrets:
 
 ```bash
 helm install kartero oci://registry-1.docker.io/zondax/kartero \
-  --version 0.4.1 \
+  --version 0.4.2 \
   --namespace signoz \
   --set github.owner=kunobi-ninja \
   --set github.repo=kunobi-frontend \
