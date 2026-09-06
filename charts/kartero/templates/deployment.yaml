@@ -26,8 +26,14 @@ spec:
         {{- with .Values.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
-      {{- if or .Values.signoz.scrape .Values.podAnnotations }}
       annotations:
+        # The collector reads its configuration once, at startup. Without this
+        # a changed allowlist or a newly configured source is written to the
+        # ConfigMap, mounted, and never read — accepted, inert, and silent
+        # about it. The checksum makes the pod template change with the
+        # config, so Flux rolls the pod that has to read it.
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+      {{- if or .Values.signoz.scrape .Values.podAnnotations }}
         {{- if .Values.signoz.scrape }}
         signoz.io/scrape: "true"
         signoz.io/port: {{ .Values.signoz.port | default .Values.service.port | quote }}
