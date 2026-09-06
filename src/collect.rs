@@ -5,11 +5,11 @@ use crate::github::{self, ArtifactRef, GitHub, WorkflowRun};
 use crate::ledger::{DeliveryKey, DeliveryStatus, Ledger};
 use crate::metrics::Metrics;
 use crate::otlp::{self, Envelope};
-use crate::self_telemetry::{self, CollectSnapshot};
+use crate::self_telemetry::{self, CollectSnapshot, SourceStatus};
 use anyhow::{Context, Result, bail};
 use reqwest::StatusCode;
 use std::time::{Duration, Instant};
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 pub async fn collect_once(config: &Config) -> Result<()> {
     let started = Instant::now();
@@ -56,13 +56,19 @@ async fn collect_inner(config: &Config, snapshot: &mut CollectSnapshot) -> Resul
     // repository in the same process.
     let mut failed = Vec::new();
     for source in &config.sources {
+        let slug = source.slug();
         let result = collect_source(
             config, source, &allowlist, &ledger, &client, metrics, snapshot,
         )
         .await;
+        metrics.set_source_up(&slug, result.is_ok());
+        snapshot.source_status.push(SourceStatus {
+            slug: slug.clone(),
+            up: result.is_ok(),
+        });
         if let Err(err) = result {
-            warn!(source = %source.slug(), error = %err, "collecting source failed");
-            failed.push(source.slug());
+            warn!(source = %slug, error = %err, "collecting source failed");
+            failed.push(slug);
         }
     }
     if !failed.is_empty() {
@@ -86,7 +92,25 @@ async fn collect_source(
         Ok(runs) => runs,
         Err(err) => {
             snapshot.github_errors += 1;
-            warn!(source = %source.slug(), error = %err, "listing completed GitHub workflow runs failed");
+            // A permanent failure gets ERROR and its own metric label. It is
+            // not a bad minute, and logging it at the same level as one is how
+            // it stays unnoticed: every pass looks like the last, and the
+            // artifact counters sit at zero, which is indistinguishable from a
+            // repository that has nothing to collect yet.
+            if github::is_permanent(&err) {
+                metrics.inc_source_listing_failure(&source.slug(), "not_found");
+                snapshot.sources_misconfigured += 1;
+                error!(
+                    source = %source.slug(),
+                    trusted_branch = %source.trusted_branch,
+                    error = %err,
+                    "source is misconfigured and will not recover without a change; \
+                     check that the token in this source's secret can see the repository"
+                );
+            } else {
+                metrics.inc_source_listing_failure(&source.slug(), "other");
+                warn!(source = %source.slug(), error = %err, "listing completed GitHub workflow runs failed");
+            }
             return Err(err);
         }
     };

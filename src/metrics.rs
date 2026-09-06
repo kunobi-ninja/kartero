@@ -1,6 +1,7 @@
 use crate::self_telemetry::{ArchiveSnapshot, CollectSnapshot};
 use prometheus::{
-    Encoder, Histogram, IntCounterVec, IntGauge, Registry, TextEncoder, histogram_opts, opts,
+    Encoder, Histogram, IntCounterVec, IntGauge, IntGaugeVec, Registry, TextEncoder,
+    histogram_opts, opts,
 };
 use std::sync::OnceLock;
 
@@ -16,6 +17,8 @@ pub struct Metrics {
     runs: IntCounterVec,
     artifacts_discovered: IntCounterVec,
     collect_errors: IntCounterVec,
+    source_up: IntGaugeVec,
+    source_listing_failures: IntCounterVec,
     archive_artifacts: IntCounterVec,
     archive_passes: IntCounterVec,
     archive_duration: Histogram,
@@ -99,6 +102,32 @@ impl Metrics {
             &["component"],
         )
         .expect("collect errors counter");
+        // Per source, because with several in one process a single dead one
+        // is invisible in any total. This is the series worth alerting on:
+        // 0 for longer than an interval means that source is delivering
+        // nothing, whatever the aggregate says.
+        let source_up = IntGaugeVec::new(
+            opts!(
+                "kartero_source_up",
+                "1 when a source listed its workflow runs on the last pass, 0 when it failed."
+            ),
+            &["source"],
+        )
+        .expect("source up gauge");
+        let source_listing_failures = IntCounterVec::new(
+            opts!(
+                "kartero_source_listing_failures_total",
+                "Listing failures per source. kind=not_found is a configuration or token problem and will not resolve on its own."
+            ),
+            &["source", "kind"],
+        )
+        .expect("source listing failures counter");
+        registry
+            .register(Box::new(source_up.clone()))
+            .expect("register source up");
+        registry
+            .register(Box::new(source_listing_failures.clone()))
+            .expect("register source listing failures");
         registry
             .register(Box::new(artifacts.clone()))
             .expect("register artifacts");
@@ -211,11 +240,28 @@ impl Metrics {
             runs,
             artifacts_discovered,
             collect_errors,
+            source_up,
+            source_listing_failures,
             archive_artifacts,
             archive_passes,
             archive_duration,
             archive_errors,
         }
+    }
+
+    /// Called for every configured source on every pass, so a source that
+    /// starts failing moves rather than simply stopping. A series that stops
+    /// being written looks the same as a scrape that stopped.
+    pub fn set_source_up(&self, source: &str, up: bool) {
+        self.source_up
+            .with_label_values(&[source])
+            .set(i64::from(up));
+    }
+
+    pub fn inc_source_listing_failure(&self, source: &str, kind: &str) {
+        self.source_listing_failures
+            .with_label_values(&[source, kind])
+            .inc();
     }
 
     pub fn inc_artifact(&self, outcome: &str) {

@@ -31,6 +31,28 @@ pub struct GitHub {
     config: SourceConfig,
 }
 
+/// A source failure that waiting will not fix.
+///
+/// The retry loop exists for a slow network and a bad minute. Treating a
+/// misconfiguration the same way is how a collector runs for a week, stays
+/// Ready, and collects nothing.
+#[derive(Debug, thiserror::Error)]
+pub enum SourceFailure {
+    #[error(
+        "{owner}/{repo} workflow {workflow} returned 404: the repository or the workflow file does not exist, or this source's token cannot see the repository"
+    )]
+    NotFound {
+        owner: String,
+        repo: String,
+        workflow: String,
+    },
+}
+
+/// Whether an error is one that waiting cannot fix.
+pub fn is_permanent(error: &anyhow::Error) -> bool {
+    error.downcast_ref::<SourceFailure>().is_some()
+}
+
 pub fn is_trusted(event: &str, head_branch: &str, trusted_branch: &str) -> bool {
     matches!(event, "schedule" | "workflow_dispatch" | "push") && head_branch == trusted_branch
 }
@@ -80,11 +102,20 @@ impl GitHub {
                 "https://api.github.com/repos/{}/{}/actions/workflows/{workflow}/runs?status=completed&per_page=30",
                 self.config.owner, self.config.repo
             );
-            let body: RunsResponse = self
-                .client
-                .get(url)
-                .send()
-                .await?
+            let response = self.client.get(url).send().await?;
+            // GitHub answers 404 rather than 403 for a private repository a
+            // token cannot see, so as not to leak existence. That means a
+            // missing grant is indistinguishable from a missing workflow file,
+            // and neither improves by retrying.
+            if response.status() == reqwest::StatusCode::NOT_FOUND {
+                return Err(SourceFailure::NotFound {
+                    owner: self.config.owner.clone(),
+                    repo: self.config.repo.clone(),
+                    workflow: workflow.clone(),
+                }
+                .into());
+            }
+            let body: RunsResponse = response
                 .error_for_status()?
                 .json()
                 .await
@@ -217,6 +248,26 @@ mod tests {
             assert!(is_trusted(event, "main", "main"));
             assert!(!is_trusted(event, "feat/foo", "main"));
         }
+    }
+
+    #[test]
+    fn a_404_is_permanent_and_says_what_to_check() {
+        let err: anyhow::Error = SourceFailure::NotFound {
+            owner: "Zondax".into(),
+            repo: "kunobi-frontend".into(),
+            workflow: "ci.yaml".into(),
+        }
+        .into();
+        assert!(is_permanent(&err));
+        let text = err.to_string();
+        assert!(text.contains("Zondax/kunobi-frontend"), "{text}");
+        assert!(text.contains("token"), "{text}");
+    }
+
+    #[test]
+    fn an_ordinary_failure_is_not_permanent() {
+        let err = anyhow::anyhow!("connection reset");
+        assert!(!is_permanent(&err));
     }
 
     #[test]
