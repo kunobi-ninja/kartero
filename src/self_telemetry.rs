@@ -37,6 +37,8 @@ pub struct CollectSnapshot {
     pub ingest_errors: u64,
     /// Sources whose listing failed for a reason waiting will not fix.
     pub sources_misconfigured: u64,
+    /// Run attempts whose metrics were derived and delivered this pass.
+    pub attempts_derived: u64,
     pub source_status: Vec<SourceStatus>,
     /// `(source, unix seconds)` for tokens that expire.
     pub token_expiry: Vec<(String, i64)>,
@@ -104,6 +106,7 @@ pub fn serialize(snapshot: &CollectSnapshot) -> Value {
                     gauge("kartero.collect.ok", "1", vec![as_int(u64::from(snapshot.ok), &time, &run_attrs)]),
                     gauge("kartero.collect.sources", "{source}", vec![as_int(snapshot.sources, &time, &run_attrs)]),
                     gauge("kartero.collect.sources_misconfigured", "{source}", vec![as_int(snapshot.sources_misconfigured, &time, &run_attrs)]),
+                    gauge("kartero.collect.attempts_derived", "{attempt}", vec![as_int(snapshot.attempts_derived, &time, &run_attrs)]),
                     gauge("kartero.collect.source_up", "1", source_points(snapshot, &time)),
                     gauge("kartero.collect.source_token_expires", "s", token_expiry_points(snapshot, &time)),
                     gauge("kartero.collect.runs", "{run}", vec![
@@ -347,6 +350,7 @@ mod tests {
                 },
             ],
             sources_misconfigured: 1,
+            attempts_derived: 7,
             token_expiry: vec![("Zondax/kunobi-frontend".into(), 1_820_322_862)],
             runs_seen: 10,
             runs_trusted: 2,
@@ -377,6 +381,7 @@ mod tests {
         assert!(names.contains(&"kartero.collect.sources"));
         assert!(names.contains(&"kartero.collect.source_up"));
         assert!(names.contains(&"kartero.collect.sources_misconfigured"));
+        assert!(names.contains(&"kartero.collect.attempts_derived"));
         assert!(names.contains(&"kartero.collect.source_token_expires"));
         assert!(names.contains(&"kartero.collect.errors"));
         let dumped = body.to_string();

@@ -14,6 +14,7 @@
 //! API payloads in `fixtures/actions` rather than against a live API.
 
 pub mod classify;
+pub mod emit;
 pub mod flake;
 pub mod jobs;
 pub mod model;

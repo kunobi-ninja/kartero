@@ -121,8 +121,8 @@ async fn collect_source(
     };
     snapshot.runs_seen += runs.len() as u64;
     let mut had_errors = false;
-    for run in runs {
-        if !github.trusted(&run) {
+    for run in &runs {
+        if !github.trusted(run) {
             continue;
         }
         snapshot.runs_trusted += 1;
@@ -142,7 +142,7 @@ async fn collect_source(
             }
             snapshot.artifacts_matched += 1;
             if let Err(err) = ingest_one(
-                config, allowlist, ledger, &github, client, metrics, snapshot, &run, &artifact,
+                config, allowlist, ledger, &github, client, metrics, snapshot, run, &artifact,
             )
             .await
             {
@@ -159,8 +159,98 @@ async fn collect_source(
             }
         }
     }
+    if let Some(actions) = source.actions.as_ref()
+        && let Err(err) = derive_actions(
+            config, source, actions, &runs, ledger, &github, client, snapshot,
+        )
+        .await
+    {
+        warn!(source = %source.slug(), error = %err, "deriving CI metrics failed");
+        had_errors = true;
+    }
+
     if had_errors {
         bail!("one or more artifact operations failed");
+    }
+    Ok(())
+}
+
+/// Derive and deliver the metrics for every attempt this source has not
+/// already reported.
+///
+/// One request per attempt, sealed only after it is delivered. Doing a whole
+/// window in one body would mean a failure that repeats re-sends everything
+/// before it on every pass and seals none of it — and these are delta points,
+/// so re-sending is not free.
+#[allow(clippy::too_many_arguments)]
+async fn derive_actions(
+    config: &Config,
+    source: &SourceConfig,
+    actions: &crate::config::ActionsConfig,
+    runs: &[WorkflowRun],
+    ledger: &Ledger,
+    github: &GitHub,
+    client: &reqwest::Client,
+    snapshot: &mut CollectSnapshot,
+) -> Result<()> {
+    let metrics = Metrics::global();
+    for run in runs {
+        // Attempt 1 has no predecessor, so a flake cannot be read from it; the
+        // pair is fetched only where there is a transition to classify.
+        for attempt in 1..=run.attempt {
+            if ledger.attempt_is_sealed(run.repo_id, run.run_id, attempt)? {
+                continue;
+            }
+            let jobs = github
+                .list_jobs(run.run_id, attempt)
+                .await
+                .with_context(|| format!("{} run {}", source.slug(), run.run_id))?;
+            let mut derived = crate::actions::derive(&run.detail, &jobs, actions);
+
+            if attempt > 1 {
+                let previous = github.list_jobs(run.run_id, attempt - 1).await?;
+                let flake = crate::actions::flake::derive(
+                    &run.detail,
+                    &jobs,
+                    &run.detail,
+                    &previous,
+                    actions,
+                );
+                derived.points.extend(flake.points);
+            }
+
+            if !derived.points.is_empty() {
+                let observed = vec![run.observed_at; derived.points.len()];
+                let body = crate::actions::emit::to_otlp(&derived.points, &observed);
+                deliver_derived(config, client, &body).await?;
+                snapshot.metrics_kept += derived.points.len() as u64;
+                metrics.add_kept(derived.points.len() as u64);
+            }
+            ledger.seal_attempt(run.repo_id, run.run_id, attempt)?;
+            snapshot.attempts_derived += 1;
+        }
+    }
+    Ok(())
+}
+
+async fn deliver_derived(
+    config: &Config,
+    client: &reqwest::Client,
+    body: &serde_json::Value,
+) -> Result<()> {
+    let url = format!("{}/v1/metrics", config.otlp_endpoint.trim_end_matches('/'));
+    let response = client
+        .post(url)
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .body(serde_json::to_vec(body)?)
+        .send()
+        .await
+        .context("posting derived CI metrics")?;
+    if !response.status().is_success() {
+        bail!(
+            "OTLP backend rejected derived metrics with {}",
+            response.status()
+        );
     }
     Ok(())
 }
