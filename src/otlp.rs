@@ -7,6 +7,13 @@ const MAX_SCOPES_PER_RESOURCE: usize = 8;
 const MAX_METRICS_PER_SCOPE: usize = 128;
 const MAX_POINTS_PER_METRIC: usize = 128;
 const MAX_ATTRIBUTES: usize = 32;
+const MAX_BUCKETS_PER_POINT: usize = 64;
+
+/// OTLP carries a metric's points under exactly one of these keys, and the
+/// shape of a data point depends on which. `exponentialHistogram` and
+/// `summary` are deliberately absent: nothing produces them, and admitting a
+/// shape with no test coverage is how the gauge-only assumption survived.
+const INSTRUMENTS: [&str; 3] = ["gauge", "sum", "histogram"];
 
 #[derive(Debug, Clone)]
 pub struct Envelope {
@@ -127,8 +134,14 @@ fn filter_points(
     allowlist: &Allowlist,
     stats: &mut FilterStats,
 ) -> Result<bool> {
+    let Some(instrument) = instrument_of(metric, metric_name)? else {
+        return Ok(false);
+    };
+    if instrument != "gauge" {
+        check_temporality(metric, instrument, metric_name)?;
+    }
     let Some(points) = metric
-        .pointer_mut("/gauge/dataPoints")
+        .pointer_mut(&format!("/{instrument}/dataPoints"))
         .and_then(Value::as_array_mut)
     else {
         return Ok(false);
@@ -138,6 +151,9 @@ fn filter_points(
     }
     let mut kept = Vec::new();
     for mut point in points.drain(..) {
+        if instrument == "histogram" {
+            check_buckets(&point, metric_name)?;
+        }
         if !retain_point(&mut point, metric_name, allowlist)? {
             stats.points_dropped += 1;
             continue;
@@ -149,8 +165,91 @@ fn filter_points(
     Ok(!empty)
 }
 
+/// Which of the OTLP instrument fields this metric carries, if any.
+///
+/// `None` means an instrument Kartero does not deliver, and the caller drops
+/// the metric. Two instruments on one metric is malformed OTLP rather than a
+/// filtering decision, so it rejects the whole payload: a producer that sends
+/// it is not describing anything a backend can read.
+fn instrument_of(metric: &Value, metric_name: &str) -> Result<Option<&'static str>> {
+    let mut found = None;
+    for instrument in INSTRUMENTS {
+        if metric.get(instrument).is_none() {
+            continue;
+        }
+        if found.is_some() {
+            bail!("metric {metric_name} carries more than one instrument");
+        }
+        found = Some(instrument);
+    }
+    Ok(found)
+}
+
+/// Sums and histograms mean nothing without a temporality.
+///
+/// Both are accepted. A cumulative point is safe to replay because a second
+/// observation of the same counter carries the same number; a delta point is
+/// not, and deduplication for those stays with the producer. The ledger
+/// guarantees an artifact is delivered at most once, which is a different
+/// promise. An absent or unspecified temporality is the case worth refusing:
+/// backends assume one of the two, and the wrong guess silently rescales the
+/// series.
+///
+/// The enum arrives either as its proto name or as its number, depending on
+/// how the producer serialised it, and neither encoding is more correct.
+fn check_temporality(metric: &Value, instrument: &str, metric_name: &str) -> Result<()> {
+    let declared = match metric.pointer(&format!("/{instrument}/aggregationTemporality")) {
+        Some(Value::String(name)) => matches!(
+            name.as_str(),
+            "AGGREGATION_TEMPORALITY_DELTA" | "AGGREGATION_TEMPORALITY_CUMULATIVE"
+        ),
+        Some(Value::Number(code)) => matches!(code.as_u64(), Some(1 | 2)),
+        _ => false,
+    };
+    if !declared {
+        bail!("{metric_name} must declare a delta or cumulative aggregationTemporality");
+    }
+    Ok(())
+}
+
+/// OTLP requires exactly one more bucket count than bound, the last being the
+/// overflow above the final bound.
+///
+/// A payload that gets this wrong is accepted by most backends and
+/// misdescribes every observation in it rather than being refused, so the
+/// check has to happen here.
+fn check_buckets(point: &Value, metric_name: &str) -> Result<()> {
+    let counts = point.get("bucketCounts").and_then(Value::as_array);
+    let bounds = point.get("explicitBounds").and_then(Value::as_array);
+    let (Some(counts), Some(bounds)) = (counts, bounds) else {
+        bail!("histogram point for {metric_name} is missing bucketCounts or explicitBounds");
+    };
+    if counts.len() > MAX_BUCKETS_PER_POINT {
+        bail!("histogram point for {metric_name} has too many buckets");
+    }
+    if counts.len() != bounds.len() + 1 {
+        bail!(
+            "histogram point for {metric_name} has {} bucket counts for {} bounds",
+            counts.len(),
+            bounds.len()
+        );
+    }
+    if let Some(sum) = point.get("sum")
+        && !sum.as_f64().is_some_and(f64::is_finite)
+    {
+        bail!("histogram point for {metric_name} has a non-finite sum");
+    }
+    Ok(())
+}
+
 fn retain_point(point: &mut Value, metric_name: &str, allowlist: &Allowlist) -> Result<bool> {
-    let Some(attrs) = point.get_mut("attributes").and_then(Value::as_array_mut) else {
+    let Some(fields) = point.as_object_mut() else {
+        return Ok(false);
+    };
+    // A point may legitimately carry no attributes at all. Treat that as the
+    // empty set and apply the same rules, rather than dropping it unread.
+    let attrs = fields.entry("attributes").or_insert_with(|| json!([]));
+    let Some(attrs) = attrs.as_array_mut() else {
         return Ok(false);
     };
     if attrs.len() > MAX_ATTRIBUTES {
@@ -200,9 +299,12 @@ metrics:
   - kache.bench.speedup
   - kache.bench.surprise
   - kache.ci.coverage.lines
+  - kache.cache.uploads
+  - ci.job.duration
 attributes:
   - kache.bench.project
   - kache.bench.cache_tool
+  - kache.cache.result
   - cicd.pipeline.name
   - vcs.repository.url.full
   - kache.telemetry.schema_version
@@ -278,15 +380,11 @@ projects:
     }
 
     #[test]
-    fn drops_non_gauges_and_points_without_a_project() {
+    fn drops_bench_points_without_a_project() {
         let body = json!({
             "resourceMetrics": [{
                 "scopeMetrics": [{
                     "metrics": [
-                        {
-                            "name": "kache.bench.speedup",
-                            "sum": {"dataPoints": [{"asDouble": 2.0, "attributes": []}]}
-                        },
                         {
                             "name": "kache.bench.surprise",
                             "gauge": {"dataPoints": [{"asDouble": 1.0, "attributes": [
@@ -307,7 +405,7 @@ projects:
             prepare(&serde_json::to_vec(&body).unwrap(), &list(), &envelope()).unwrap();
         let out: Value = serde_json::from_slice(&out).unwrap();
         assert_eq!(stats.metrics_kept, 1);
-        assert_eq!(stats.metrics_dropped, 2);
+        assert_eq!(stats.metrics_dropped, 1);
         assert_eq!(stats.points_dropped, 1);
         assert_eq!(
             out["resourceMetrics"][0]["scopeMetrics"][0]["metrics"]
@@ -316,6 +414,201 @@ projects:
                 .len(),
             1
         );
+    }
+
+    /// The shape `kache/src/otel.rs` writes for its daemon counters. These
+    /// were allowlisted and then silently discarded at import.
+    #[test]
+    fn delivers_cumulative_sums() {
+        let body = json!({
+            "resourceMetrics": [{
+                "scopeMetrics": [{
+                    "metrics": [{
+                        "name": "kache.cache.uploads",
+                        "unit": "{upload}",
+                        "sum": {
+                            "aggregationTemporality": "AGGREGATION_TEMPORALITY_CUMULATIVE",
+                            "isMonotonic": true,
+                            "dataPoints": [
+                                {
+                                    "asInt": "10",
+                                    "timeUnixNano": "1700000000000000000",
+                                    "startTimeUnixNano": "1699999999000000000",
+                                    "attributes": [
+                                        {"key": "kache.cache.result", "value": {"stringValue": "completed"}},
+                                        {"key": "kache.cache.secret", "value": {"stringValue": "drop me"}}
+                                    ]
+                                }
+                            ]
+                        }
+                    }]
+                }]
+            }]
+        });
+        let (out, stats) =
+            prepare(&serde_json::to_vec(&body).unwrap(), &list(), &envelope()).unwrap();
+        let out: Value = serde_json::from_slice(&out).unwrap();
+        assert_eq!(stats.metrics_kept, 1);
+        assert_eq!(stats.metrics_dropped, 0);
+        let point =
+            &out["resourceMetrics"][0]["scopeMetrics"][0]["metrics"][0]["sum"]["dataPoints"][0];
+        assert_eq!(point["asInt"], "10");
+        let keys: Vec<_> = point["attributes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|a| a["key"].as_str().unwrap())
+            .collect();
+        assert_eq!(keys, vec!["kache.cache.result"]);
+    }
+
+    #[test]
+    fn delivers_delta_sums() {
+        let body = json!({
+            "resourceMetrics": [{
+                "scopeMetrics": [{
+                    "metrics": [{
+                        "name": "kache.cache.uploads",
+                        "sum": {
+                            "aggregationTemporality": 1,
+                            "isMonotonic": true,
+                            "dataPoints": [{"asInt": "3", "attributes": []}]
+                        }
+                    }]
+                }]
+            }]
+        });
+        let (_, stats) =
+            prepare(&serde_json::to_vec(&body).unwrap(), &list(), &envelope()).unwrap();
+        assert_eq!(stats.metrics_kept, 1);
+    }
+
+    #[test]
+    fn refuses_a_sum_with_no_temporality() {
+        let body = json!({
+            "resourceMetrics": [{
+                "scopeMetrics": [{
+                    "metrics": [{
+                        "name": "kache.cache.uploads",
+                        "sum": {"dataPoints": [{"asInt": "3", "attributes": []}]}
+                    }]
+                }]
+            }]
+        });
+        let error = prepare(&serde_json::to_vec(&body).unwrap(), &list(), &envelope())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("aggregationTemporality"), "{error}");
+    }
+
+    #[test]
+    fn delivers_histograms() {
+        let (_, stats) = prepare(
+            &serde_json::to_vec(&histogram_body(
+                vec![json!("0"), json!("1")],
+                vec![json!(30.0)],
+            ))
+            .unwrap(),
+            &list(),
+            &envelope(),
+        )
+        .unwrap();
+        assert_eq!(stats.metrics_kept, 1);
+    }
+
+    #[test]
+    fn refuses_a_histogram_whose_buckets_do_not_match_its_bounds() {
+        let body = histogram_body(vec![json!("0"), json!("1")], vec![json!(30.0), json!(60.0)]);
+        let error = prepare(&serde_json::to_vec(&body).unwrap(), &list(), &envelope())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("bucket counts"), "{error}");
+    }
+
+    #[test]
+    fn drops_instruments_kartero_does_not_deliver() {
+        let body = json!({
+            "resourceMetrics": [{
+                "scopeMetrics": [{
+                    "metrics": [{
+                        "name": "kache.cache.uploads",
+                        "summary": {"dataPoints": [{"count": "1", "sum": 2.0}]}
+                    }]
+                }]
+            }]
+        });
+        let error = prepare(&serde_json::to_vec(&body).unwrap(), &list(), &envelope())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("dropped every metric"), "{error}");
+    }
+
+    #[test]
+    fn refuses_a_metric_carrying_two_instruments() {
+        let body = json!({
+            "resourceMetrics": [{
+                "scopeMetrics": [{
+                    "metrics": [{
+                        "name": "kache.cache.uploads",
+                        "gauge": {"dataPoints": [{"asInt": "1", "attributes": []}]},
+                        "sum": {
+                            "aggregationTemporality": 2,
+                            "dataPoints": [{"asInt": "1", "attributes": []}]
+                        }
+                    }]
+                }]
+            }]
+        });
+        let error = prepare(&serde_json::to_vec(&body).unwrap(), &list(), &envelope())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("more than one instrument"), "{error}");
+    }
+
+    #[test]
+    fn keeps_a_point_that_carries_no_attributes_key() {
+        let body = json!({
+            "resourceMetrics": [{
+                "scopeMetrics": [{
+                    "metrics": [{
+                        "name": "kache.ci.coverage.lines",
+                        "gauge": {"dataPoints": [{"asDouble": 89.5}]}
+                    }]
+                }]
+            }]
+        });
+        let (out, stats) =
+            prepare(&serde_json::to_vec(&body).unwrap(), &list(), &envelope()).unwrap();
+        let out: Value = serde_json::from_slice(&out).unwrap();
+        assert_eq!(stats.metrics_kept, 1);
+        assert_eq!(stats.points_dropped, 0);
+        let point =
+            &out["resourceMetrics"][0]["scopeMetrics"][0]["metrics"][0]["gauge"]["dataPoints"][0];
+        assert_eq!(point["attributes"], json!([]));
+    }
+
+    fn histogram_body(bucket_counts: Vec<Value>, explicit_bounds: Vec<Value>) -> Value {
+        json!({
+            "resourceMetrics": [{
+                "scopeMetrics": [{
+                    "metrics": [{
+                        "name": "ci.job.duration",
+                        "unit": "s",
+                        "histogram": {
+                            "aggregationTemporality": "AGGREGATION_TEMPORALITY_DELTA",
+                            "dataPoints": [{
+                                "count": "1",
+                                "sum": 12.0,
+                                "bucketCounts": bucket_counts,
+                                "explicitBounds": explicit_bounds,
+                                "timeUnixNano": "1700000000000000000",
+                                "attributes": []
+                            }]
+                        }
+                    }]
+                }]
+            }]
+        })
     }
 
     #[test]
