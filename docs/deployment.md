@@ -113,6 +113,39 @@ One instance means one ledger and one allowlist for every source. A second
 Deployment is still an option, and costs a second PVC, a second token to
 rotate and a second thing to watch.
 
+## Watching a source
+
+A source that cannot be listed is the failure worth alerting on, because it is
+the one that looks like nothing. The pod stays Ready, collect passes keep
+running on schedule, and every artifact counter sits at zero — which is
+exactly what a repository with nothing to collect yet looks like.
+
+```
+kartero_source_up{source="owner/repo"} == 0
+```
+
+Alert on that being 0 for longer than one `interval`. It is written for every
+configured source on every pass, so a source that starts failing moves rather
+than stopping, and a series that stops being written means the scrape stopped
+rather than the source recovering.
+
+`kartero_source_listing_failures_total{source, kind}` says which kind of
+failure. `kind="not_found"` will not resolve on its own: the repository or the
+workflow file does not exist, or that source's token cannot see the
+repository. GitHub answers 404 rather than 403 for a private repository a
+token cannot see, so a missing grant and a missing file are indistinguishable
+from the outside — check the token first, since it is the more common of the
+two. These are logged at ERROR naming the source; ordinary transport failures
+stay at WARN.
+
+Readiness deliberately does not fail on this. The Prometheus endpoint is
+served by the same process, so making the pod unready would remove it from
+scrape discovery and hide the very metrics that diagnose the problem.
+
+The same signal reaches the OTLP backend as `kartero.collect.source_up`, with
+the source in the `kartero.source` attribute, and
+`kartero.collect.sources_misconfigured` counts them per pass.
+
 ## Archive diagnostic artifacts
 
 Off by default. Turn it on in Helm; the running Deployment (`kartero run`) then

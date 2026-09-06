@@ -10,6 +10,13 @@ use anyhow::{Context, Result};
 use serde_json::{Value, json};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// How one source fared on one pass.
+#[derive(Debug, Clone)]
+pub struct SourceStatus {
+    pub slug: String,
+    pub up: bool,
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct CollectSnapshot {
     pub duration_s: f64,
@@ -28,6 +35,9 @@ pub struct CollectSnapshot {
     pub points_dropped: u64,
     pub github_errors: u64,
     pub ingest_errors: u64,
+    /// Sources whose listing failed for a reason waiting will not fix.
+    pub sources_misconfigured: u64,
+    pub source_status: Vec<SourceStatus>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -91,6 +101,8 @@ pub fn serialize(snapshot: &CollectSnapshot) -> Value {
                     gauge("kartero.collect.duration", "s", vec![as_double(snapshot.duration_s, &time, &run_attrs)]),
                     gauge("kartero.collect.ok", "1", vec![as_int(u64::from(snapshot.ok), &time, &run_attrs)]),
                     gauge("kartero.collect.sources", "{source}", vec![as_int(snapshot.sources, &time, &run_attrs)]),
+                    gauge("kartero.collect.sources_misconfigured", "{source}", vec![as_int(snapshot.sources_misconfigured, &time, &run_attrs)]),
+                    gauge("kartero.collect.source_up", "1", source_points(snapshot, &time)),
                     gauge("kartero.collect.runs", "{run}", vec![
                         as_int(snapshot.runs_seen, &time, &[str_attr("kartero.run.state", "seen")]),
                         as_int(snapshot.runs_trusted, &time, &[str_attr("kartero.run.state", "trusted")]),
@@ -257,6 +269,22 @@ fn now_unix_nano() -> String {
         .to_string()
 }
 
+/// One point per configured source, so a single dead source is visible in a
+/// payload whose totals look ordinary.
+fn source_points(snapshot: &CollectSnapshot, time: &str) -> Vec<Value> {
+    snapshot
+        .source_status
+        .iter()
+        .map(|status| {
+            as_int(
+                u64::from(status.up),
+                time,
+                &[str_attr("kartero.source", &status.slug)],
+            )
+        })
+        .collect()
+}
+
 fn gauge(name: &str, unit: &str, data_points: Vec<Value>) -> Value {
     json!({ "name": name, "unit": unit, "gauge": { "dataPoints": data_points } })
 }
@@ -291,6 +319,17 @@ mod tests {
             duration_s: 1.5,
             ok: true,
             sources: 2,
+            source_status: vec![
+                SourceStatus {
+                    slug: "kunobi-ninja/kache".into(),
+                    up: true,
+                },
+                SourceStatus {
+                    slug: "Zondax/kunobi-frontend".into(),
+                    up: false,
+                },
+            ],
+            sources_misconfigured: 1,
             runs_seen: 10,
             runs_trusted: 2,
             artifacts_seen: 4,
@@ -318,6 +357,8 @@ mod tests {
         assert!(names.contains(&"kartero.collect.duration"));
         assert!(names.contains(&"kartero.collect.series_dropped"));
         assert!(names.contains(&"kartero.collect.sources"));
+        assert!(names.contains(&"kartero.collect.source_up"));
+        assert!(names.contains(&"kartero.collect.sources_misconfigured"));
         assert!(names.contains(&"kartero.collect.errors"));
         let dumped = body.to_string();
         assert!(!dumped.contains("cicd."));
