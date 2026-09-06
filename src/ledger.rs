@@ -88,6 +88,20 @@ impl Ledger {
                 status TEXT NOT NULL,
                 archived_at TEXT NOT NULL,
                 PRIMARY KEY (repo_id, run_id, attempt, artifact_id, digest)
+            );
+            -- Attempts whose derived metrics have been delivered.
+            --
+            -- Keyed on the attempt rather than the run, because a rerun bumps
+            -- the attempt number on an existing run instead of creating a new
+            -- one. A run-keyed table would seal a run at its first attempt and
+            -- never look again, losing every rerun and with it the flake
+            -- signal that only a second attempt can carry.
+            CREATE TABLE IF NOT EXISTS attempts (
+                repo_id INTEGER NOT NULL,
+                run_id INTEGER NOT NULL,
+                attempt INTEGER NOT NULL,
+                derived_at TEXT NOT NULL,
+                PRIMARY KEY (repo_id, run_id, attempt)
             );",
         )?;
         Ok(Self {
@@ -152,6 +166,30 @@ impl Ledger {
                 object_key,
                 status.as_str(),
             ],
+        )?;
+        Ok(())
+    }
+
+    /// Whether this attempt's metrics have already been delivered.
+    pub fn attempt_is_sealed(&self, repo_id: i64, run_id: i64, attempt: i64) -> Result<bool> {
+        let conn = self.conn.lock().expect("ledger mutex");
+        let mut stmt = conn.prepare(
+            "SELECT 1 FROM attempts WHERE repo_id = ?1 AND run_id = ?2 AND attempt = ?3",
+        )?;
+        Ok(stmt.exists(rusqlite::params![repo_id, run_id, attempt])?)
+    }
+
+    /// Sealed only after delivery, so a failed POST replays on the next pass.
+    ///
+    /// Sealed even when an attempt derived nothing: some legitimately do, and
+    /// leaving those open means re-reading them on every sweep until they age
+    /// out of the listing.
+    pub fn seal_attempt(&self, repo_id: i64, run_id: i64, attempt: i64) -> Result<()> {
+        let conn = self.conn.lock().expect("ledger mutex");
+        conn.execute(
+            "INSERT OR REPLACE INTO attempts (repo_id, run_id, attempt, derived_at)
+             VALUES (?1, ?2, ?3, datetime('now'))",
+            rusqlite::params![repo_id, run_id, attempt],
         )?;
         Ok(())
     }

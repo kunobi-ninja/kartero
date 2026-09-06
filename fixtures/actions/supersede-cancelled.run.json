@@ -1,0 +1,17 @@
+{
+  "conclusion": "cancelled",
+  "created_at": "2026-08-21T07:44:16Z",
+  "event": "push",
+  "head_branch": "dev",
+  "id": 32459951782,
+  "path": ".github/workflows/ci.yaml",
+  "repository": {
+    "full_name": "Zondax/kunobi-frontend"
+  },
+  "run_attempt": 1,
+  "run_number": 10562,
+  "run_started_at": "2026-08-21T07:44:16Z",
+  "status": "completed",
+  "updated_at": "2026-08-21T07:45:02Z",
+  "workflow_id": 207346613
+}

@@ -1,0 +1,281 @@
+{
+  "jobs": [
+    {
+      "completed_at": "2026-08-21T07:44:47Z",
+      "conclusion": "cancelled",
+      "created_at": "2026-08-21T07:44:35Z",
+      "labels": [
+        "zondax-runners"
+      ],
+      "name": "changes",
+      "run_attempt": 1,
+      "runner_present": true,
+      "started_at": "2026-08-21T07:44:37Z",
+      "status": "completed",
+      "steps": [
+        {
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1
+        },
+        {
+          "conclusion": "cancelled",
+          "name": "Run actions/checkout@v7",
+          "number": 2
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Run set -euo pipefail",
+          "number": 3
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@v7",
+          "number": 6
+        },
+        {
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 7
+        }
+      ]
+    },
+    {
+      "completed_at": "2026-08-21T07:44:35Z",
+      "conclusion": "skipped",
+      "created_at": "2026-08-21T07:44:35Z",
+      "labels": [
+        "zondax-runners"
+      ],
+      "name": "E2E-only filter detected",
+      "run_attempt": 1,
+      "runner_present": false,
+      "started_at": "2026-08-21T07:44:35Z",
+      "status": "completed",
+      "steps": []
+    },
+    {
+      "completed_at": "2026-08-21T07:45:01Z",
+      "conclusion": "failure",
+      "created_at": "2026-08-21T07:44:47Z",
+      "labels": [
+        "zondax-runners"
+      ],
+      "name": "CI Gate",
+      "run_attempt": 1,
+      "runner_present": true,
+      "started_at": "2026-08-21T07:44:56Z",
+      "status": "completed",
+      "steps": [
+        {
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1
+        },
+        {
+          "conclusion": "failure",
+          "name": "Verify no job failed",
+          "number": 2
+        },
+        {
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 3
+        }
+      ]
+    },
+    {
+      "completed_at": "2026-08-21T07:44:47Z",
+      "conclusion": "cancelled",
+      "created_at": "2026-08-21T07:44:47Z",
+      "labels": [
+        "zondax-runners"
+      ],
+      "name": "Docs checks",
+      "run_attempt": 1,
+      "runner_present": false,
+      "started_at": "2026-08-21T07:44:47Z",
+      "status": "completed",
+      "steps": []
+    },
+    {
+      "completed_at": "2026-08-21T07:44:47Z",
+      "conclusion": "cancelled",
+      "created_at": "2026-08-21T07:44:47Z",
+      "labels": [
+        "zondax-runners"
+      ],
+      "name": "variant-checks-linux",
+      "run_attempt": 1,
+      "runner_present": false,
+      "started_at": "2026-08-21T07:44:47Z",
+      "status": "completed",
+      "steps": []
+    },
+    {
+      "completed_at": "2026-08-21T07:44:47Z",
+      "conclusion": "skipped",
+      "created_at": "2026-08-21T07:44:47Z",
+      "labels": [],
+      "name": "rs-checks-macos",
+      "run_attempt": 1,
+      "runner_present": false,
+      "started_at": "2026-08-21T07:44:47Z",
+      "status": "completed",
+      "steps": []
+    },
+    {
+      "completed_at": "2026-08-21T07:44:47Z",
+      "conclusion": "cancelled",
+      "created_at": "2026-08-21T07:44:47Z",
+      "labels": [
+        "zondax-runners"
+      ],
+      "name": "Canvas runtime build",
+      "run_attempt": 1,
+      "runner_present": false,
+      "started_at": "2026-08-21T07:44:47Z",
+      "status": "completed",
+      "steps": []
+    },
+    {
+      "completed_at": "2026-08-21T07:44:47Z",
+      "conclusion": "skipped",
+      "created_at": "2026-08-21T07:44:47Z",
+      "labels": [],
+      "name": "e2e",
+      "run_attempt": 1,
+      "runner_present": false,
+      "started_at": "2026-08-21T07:44:47Z",
+      "status": "completed",
+      "steps": []
+    },
+    {
+      "completed_at": "2026-08-21T07:44:47Z",
+      "conclusion": "cancelled",
+      "created_at": "2026-08-21T07:44:47Z",
+      "labels": [
+        "zondax-runners"
+      ],
+      "name": "ext-rs-checks-linux",
+      "run_attempt": 1,
+      "runner_present": false,
+      "started_at": "2026-08-21T07:44:47Z",
+      "status": "completed",
+      "steps": []
+    },
+    {
+      "completed_at": "2026-08-21T07:44:47Z",
+      "conclusion": "cancelled",
+      "created_at": "2026-08-21T07:44:47Z",
+      "labels": [
+        "zondax-runners"
+      ],
+      "name": "Ordering Stamp Partition",
+      "run_attempt": 1,
+      "runner_present": false,
+      "started_at": "2026-08-21T07:44:47Z",
+      "status": "completed",
+      "steps": []
+    },
+    {
+      "completed_at": "2026-08-21T07:44:47Z",
+      "conclusion": "cancelled",
+      "created_at": "2026-08-21T07:44:48Z",
+      "labels": [
+        "zondax-runners"
+      ],
+      "name": "Isolated Rust workspaces",
+      "run_attempt": 1,
+      "runner_present": false,
+      "started_at": "2026-08-21T07:44:48Z",
+      "status": "completed",
+      "steps": []
+    },
+    {
+      "completed_at": "2026-08-21T07:44:47Z",
+      "conclusion": "skipped",
+      "created_at": "2026-08-21T07:44:48Z",
+      "labels": [],
+      "name": "ts-checks-linux",
+      "run_attempt": 1,
+      "runner_present": false,
+      "started_at": "2026-08-21T07:44:48Z",
+      "status": "completed",
+      "steps": []
+    },
+    {
+      "completed_at": "2026-08-21T07:44:47Z",
+      "conclusion": "cancelled",
+      "created_at": "2026-08-21T07:44:48Z",
+      "labels": [
+        "self-hosted",
+        "macOS",
+        "ARM64"
+      ],
+      "name": "ext-rs-checks-macos",
+      "run_attempt": 1,
+      "runner_present": false,
+      "started_at": "2026-08-21T07:44:48Z",
+      "status": "completed",
+      "steps": []
+    },
+    {
+      "completed_at": "2026-08-21T07:44:47Z",
+      "conclusion": "cancelled",
+      "created_at": "2026-08-21T07:44:48Z",
+      "labels": [
+        "zondax-runners"
+      ],
+      "name": "Agent feature matrix",
+      "run_attempt": 1,
+      "runner_present": false,
+      "started_at": "2026-08-21T07:44:48Z",
+      "status": "completed",
+      "steps": []
+    },
+    {
+      "completed_at": "2026-08-21T07:44:47Z",
+      "conclusion": "cancelled",
+      "created_at": "2026-08-21T07:44:48Z",
+      "labels": [
+        "zondax-runners"
+      ],
+      "name": "Git Best Practices",
+      "run_attempt": 1,
+      "runner_present": false,
+      "started_at": "2026-08-21T07:44:48Z",
+      "status": "completed",
+      "steps": []
+    },
+    {
+      "completed_at": "2026-08-21T07:44:47Z",
+      "conclusion": "cancelled",
+      "created_at": "2026-08-21T07:44:48Z",
+      "labels": [
+        "self-hosted",
+        "macOS",
+        "ARM64"
+      ],
+      "name": "variant-checks-macos",
+      "run_attempt": 1,
+      "runner_present": false,
+      "started_at": "2026-08-21T07:44:48Z",
+      "status": "completed",
+      "steps": []
+    },
+    {
+      "completed_at": "2026-08-21T07:44:47Z",
+      "conclusion": "skipped",
+      "created_at": "2026-08-21T07:44:48Z",
+      "labels": [],
+      "name": "rs-checks-linux",
+      "run_attempt": 1,
+      "runner_present": false,
+      "started_at": "2026-08-21T07:44:48Z",
+      "status": "completed",
+      "steps": []
+    }
+  ],
+  "total_count": 17
+}

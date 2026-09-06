@@ -1,5 +1,6 @@
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -27,6 +28,47 @@ pub struct ArchiveConfig {
 /// there. Each source carries its own token: a fine-grained token is scoped to
 /// the repositories it was minted for, so covering two repositories with one
 /// token is a choice rather than a requirement.
+/// Deriving metrics from a source's workflow runs, rather than importing an
+/// artifact it uploaded.
+///
+/// The vocabulary is configuration rather than code: a repository's trunk
+/// branches, the name of its aggregating gate job and the aliases its jobs
+/// report under are its own business, and hard-coding one repository's answers
+/// into a collector that serves several is how this ended up as a
+/// repository-local script in the first place.
+#[derive(Debug, Clone)]
+pub struct ActionsConfig {
+    /// Branch name to the class emitted for it. Anything unlisted is `other`,
+    /// so a raw branch name can never reach an attribute.
+    pub branch_classes: BTreeMap<String, String>,
+    /// The aggregating job a pull request waits on. Its own queue wait is
+    /// inside the mergeability clock, because a PR is not mergeable until it
+    /// concludes.
+    pub gate_job: String,
+    /// The job whose deliberate failure means the attempt says something about
+    /// the pull request rather than about the pipeline.
+    pub guard_job: String,
+    /// The step that replaced the guard job once it was folded into the gate.
+    pub guard_step: String,
+    /// The path-filter job every skip reason keys on. Its absence is reported
+    /// rather than absorbed, because a rename degrades every reason silently.
+    pub filter_job: String,
+    /// The job a docs-only change skips.
+    pub docs_job: String,
+    /// Declared job names. Anything else collapses to `other` and raises an
+    /// anomaly, rather than opening a series nobody approved.
+    #[allow(clippy::doc_markdown)]
+    pub canonical_jobs: Vec<String>,
+    /// Name variants of one logical job, mapped onto a single series. A
+    /// reusable caller reports its bare id when skipped and a composite when
+    /// it ran, so without this the two halves of one job land apart.
+    pub job_aliases: BTreeMap<String, String>,
+    /// Workflow *paths* whose conclusions are inverted by design, such as a
+    /// nightly flake detector where green means it measured and red means the
+    /// detector broke. Excluded whole, not per job.
+    pub excluded_workflows: Vec<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct SourceConfig {
     pub token: String,
@@ -34,6 +76,8 @@ pub struct SourceConfig {
     pub repo: String,
     pub workflows: Vec<String>,
     pub trusted_branch: String,
+    /// Absent when this source only has artifacts imported from it.
+    pub actions: Option<ActionsConfig>,
 }
 
 impl SourceConfig {
@@ -82,6 +126,23 @@ struct FileArchive {
 }
 
 #[derive(Debug, Deserialize)]
+struct FileActions {
+    #[serde(default)]
+    branch_classes: BTreeMap<String, String>,
+    gate_job: String,
+    guard_job: String,
+    guard_step: String,
+    filter_job: String,
+    docs_job: String,
+    #[serde(default)]
+    canonical_jobs: Vec<String>,
+    #[serde(default)]
+    job_aliases: BTreeMap<String, String>,
+    #[serde(default)]
+    excluded_workflows: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct FileSource {
     #[serde(default)]
     token: String,
@@ -92,6 +153,8 @@ struct FileSource {
     workflows: Vec<String>,
     #[serde(default = "default_branch")]
     trusted_branch: String,
+    #[serde(default)]
+    actions: Option<FileActions>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -164,6 +227,10 @@ impl Config {
                 )?,
                 trusted_branch: std::env::var("KARTERO_TRUSTED_BRANCH")
                     .unwrap_or_else(|_| default_branch()),
+                // Deriving metrics needs a vocabulary — branch classes, a gate
+                // job name, job aliases — which has no sensible flat
+                // environment form. That is what KARTERO_CONFIG is for.
+                actions: None,
             }],
             otlp_endpoint: std::env::var("KARTERO_OTLP_ENDPOINT").unwrap_or_else(|_| {
                 "http://signoz-otel-collector.signoz.svc.cluster.local:4318".into()
@@ -230,6 +297,17 @@ fn resolve_sources(
             repo: require_field(file.repo, "repo")?,
             workflows: validate_workflows(file.workflows)?,
             trusted_branch: require_field(file.trusted_branch, "trusted_branch")?,
+            actions: file.actions.map(|actions| ActionsConfig {
+                branch_classes: actions.branch_classes,
+                gate_job: actions.gate_job,
+                guard_job: actions.guard_job,
+                guard_step: actions.guard_step,
+                filter_job: actions.filter_job,
+                docs_job: actions.docs_job,
+                canonical_jobs: actions.canonical_jobs,
+                job_aliases: actions.job_aliases,
+                excluded_workflows: actions.excluded_workflows,
+            }),
         };
         // Two entries for one repository would list the same runs twice. The
         // ledger would absorb it, but only after paying for every extra call.

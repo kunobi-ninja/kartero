@@ -12,6 +12,13 @@ const TOKEN_EXPIRY_HEADER: &str = "github-authentication-token-expiration";
 
 #[derive(Debug, Clone)]
 pub struct WorkflowRun {
+    /// The payload as the API sent it, for the derivation rules.
+    pub detail: crate::actions::RunAttempt,
+    /// The attempt's own end, in seconds. The run-level value is the same for
+    /// every attempt, so stamping two attempts of one run with it puts both at
+    /// the same instant with the same attributes — and a store keyed on that
+    /// pair keeps one and drops the other without a word.
+    pub observed_at: f64,
     pub repo_id: i64,
     pub run_id: i64,
     pub attempt: i64,
@@ -189,15 +196,36 @@ impl GitHub {
                 .json()
                 .await
                 .with_context(|| format!("listing workflow runs for {workflow}"))?;
-            completed.extend(body.workflow_runs.into_iter().map(|run| WorkflowRun {
-                repo_id: run.repository.id,
-                run_id: run.id,
-                attempt: run.run_attempt,
-                event: run.event,
-                head_branch: run.head_branch,
-                workflow_id: run.workflow_id,
-                workflow_name: run.name.unwrap_or_else(|| workflow.clone()),
-                conclusion: run.conclusion,
+            completed.extend(body.workflow_runs.into_iter().map(|run| {
+                let head_branch = run.head_branch.clone().unwrap_or_default();
+                let observed_at = crate::actions::classify::parse_rfc3339(&run.updated_at)
+                    .or_else(|| crate::actions::classify::parse_rfc3339(&run.run_started_at))
+                    .unwrap_or_default();
+                WorkflowRun {
+                    detail: crate::actions::RunAttempt {
+                        id: run.id,
+                        run_attempt: run.run_attempt,
+                        event: run.event.clone(),
+                        status: run.status,
+                        conclusion: run.conclusion.clone(),
+                        created_at: run.created_at,
+                        run_started_at: run.run_started_at,
+                        path: run.path,
+                        head_branch: run.head_branch,
+                        repository: crate::actions::model::Repository {
+                            full_name: run.repository.full_name,
+                        },
+                    },
+                    observed_at,
+                    repo_id: run.repository.id,
+                    run_id: run.id,
+                    attempt: run.run_attempt,
+                    event: run.event,
+                    head_branch,
+                    workflow_id: run.workflow_id,
+                    workflow_name: run.name.unwrap_or_else(|| workflow.clone()),
+                    conclusion: run.conclusion,
+                }
             }));
         }
         completed.sort_unstable_by_key(|run| std::cmp::Reverse(run.run_id));
@@ -229,6 +257,41 @@ impl GitHub {
                 expired: a.expired,
             })
             .collect())
+    }
+
+    /// Every job of one attempt, paged.
+    ///
+    /// `filter=latest` would return only the newest attempt's jobs, which is
+    /// wrong for a rerun: the carried-forward jobs are exactly what tells a
+    /// partial rerun from a full one.
+    pub async fn list_jobs(
+        &self,
+        run_id: i64,
+        attempt: i64,
+    ) -> Result<crate::actions::JobsPayload> {
+        let mut all = Vec::new();
+        for page in 1..=10 {
+            let url = format!(
+                "https://api.github.com/repos/{}/{}/actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=100&page={page}",
+                self.config.owner, self.config.repo
+            );
+            let response = self.client.get(url).send().await?;
+            self.record_token_expiry(response.headers());
+            if let Some(failure) = self.classify(response.status(), response.headers(), "jobs") {
+                return Err(failure.into());
+            }
+            let body: crate::actions::JobsPayload = response
+                .error_for_status()?
+                .json()
+                .await
+                .with_context(|| format!("listing jobs for run {run_id} attempt {attempt}"))?;
+            let count = body.jobs.len();
+            all.extend(body.jobs);
+            if count < 100 {
+                break;
+            }
+        }
+        Ok(crate::actions::JobsPayload { jobs: all })
     }
 
     pub async fn download_zip(&self, artifact_id: i64) -> Result<Vec<u8>> {
@@ -329,16 +392,28 @@ struct RunJson {
     id: i64,
     run_attempt: i64,
     event: String,
-    head_branch: String,
+    head_branch: Option<String>,
     workflow_id: i64,
     name: Option<String>,
     conclusion: Option<String>,
     repository: RepoJson,
+    #[serde(default)]
+    status: String,
+    #[serde(default)]
+    created_at: String,
+    #[serde(default)]
+    run_started_at: String,
+    #[serde(default)]
+    updated_at: String,
+    #[serde(default)]
+    path: String,
 }
 
 #[derive(Debug, Deserialize)]
 struct RepoJson {
     id: i64,
+    #[serde(default)]
+    full_name: String,
 }
 
 #[derive(Debug, Deserialize)]
