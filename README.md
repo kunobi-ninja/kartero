@@ -97,6 +97,7 @@ include GitHub, artifact, validation, ledger, and OTLP failures.
 ## Documentation
 
 - [Architecture](docs/architecture.md)
+- [Producing artifacts](docs/producers.md)
 - [Coverage exporters](docs/coverage.md)
 - [Fallback gauges](docs/gauges.md)
 - [Artifact protocol](docs/artifact-protocol.md)

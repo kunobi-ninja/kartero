@@ -19,6 +19,16 @@ metrics:
   - ci.coverage.percent
   - ci.coverage.covered
   - ci.coverage.total
+  - ci.run.attempts
+  - ci.run.gate.duration
+  - ci.run.checks.duration
+  - ci.run.attempt.outcomes
+  - ci.job.duration
+  - ci.job.queue.duration
+  - ci.job.conclusions
+  - ci.job.rerun_recovered
+  - ci.collector.last_success
+  - ci.collector.anomalies
   - kache.cache.store.size
   - kache.cache.store.entries
   - kache.cache.store.max
@@ -70,6 +80,54 @@ attributes:
   - language
   - kind
   - branch_class
+  - repository
+  - workflow_path
+  - event
+  - attempt_class
+  - run_conclusion
+  - conclusion
+  - skip_reason
+  - job_name
+  - runner_pool
+  - did_work
+  - outcome
+  - recovery
+  - mode
+  - anomaly
+
+# Attributes whose values are checked as well as their keys. Only vocabularies
+# fixed in a producer's code are listed: pinning one here means a change to it
+# has to be reviewed before the new value can arrive.
+#
+# The keys left out are bounded by the producer rather than here — a job name
+# comes from a reviewed alias table, a repository from this file's own source
+# list. Kartero takes those on trust. Run ids, commit hashes, raw branch names,
+# actor logins and runner names are absent from `attributes` entirely, which is
+# the stronger guarantee: they cannot be sent at all.
+attribute_values:
+  branch_class:
+    - pull_request
+    - trunk_dev
+    - trunk_main
+    - release_pre
+    - other
+  attempt_class:
+    - first
+    - rerun
+  did_work:
+    - "true"
+    - "false"
+  recovery:
+    - recovered
+    - still_failing
+  outcome:
+    - flake
+    - revealed_failure
+    - persistent_failure
+    - rerun_of_green
+    - superseded
+    - after_cancelled
+    - other
 
 projects:
   - bench-firefox
