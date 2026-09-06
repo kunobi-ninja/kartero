@@ -5,7 +5,11 @@ use serde_json::{Value, json};
 const MAX_RESOURCE_METRICS: usize = 4;
 const MAX_SCOPES_PER_RESOURCE: usize = 8;
 const MAX_METRICS_PER_SCOPE: usize = 128;
-const MAX_POINTS_PER_METRIC: usize = 128;
+// A producer that reports one observation per run carries a point per run, so
+// a weekly sweep is hundreds rather than the handful a single build emits. The
+// zip size cap is the real bound on input; this one only stops a single metric
+// from being pathological.
+const MAX_POINTS_PER_METRIC: usize = 1024;
 const MAX_ATTRIBUTES: usize = 32;
 const MAX_BUCKETS_PER_POINT: usize = 64;
 
@@ -257,6 +261,11 @@ fn retain_point(point: &mut Value, metric_name: &str, allowlist: &Allowlist) -> 
     }
     let mut project = None;
     let mut project_count = 0usize;
+    // An attribute with a declared value set that carries something outside it
+    // drops the point rather than the attribute. Dropping the attribute would
+    // silently merge the point into a different series, which is harder to
+    // notice than a missing one.
+    let mut unbounded_value = false;
     attrs.retain(|attr| {
         let Some(key) = attr.get("key").and_then(Value::as_str) else {
             return false;
@@ -267,15 +276,23 @@ fn retain_point(point: &mut Value, metric_name: &str, allowlist: &Allowlist) -> 
         if !allowlist.allows_attribute(key) {
             return false;
         }
+        let value = attr
+            .pointer("/value/stringValue")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if !allowlist.allows_attribute_value(key, value) {
+            unbounded_value = true;
+            return false;
+        }
         if key == "kache.bench.project" {
             project_count += 1;
-            project = attr
-                .pointer("/value/stringValue")
-                .and_then(Value::as_str)
-                .map(str::to_string);
+            project = Some(value.to_string());
         }
         true
     });
+    if unbounded_value {
+        return Ok(false);
+    }
     if metric_name.starts_with("kache.bench.") {
         Ok(project_count == 1 && project.is_some_and(|name| allowlist.allows_project(&name)))
     } else {
@@ -585,6 +602,53 @@ projects:
         let point =
             &out["resourceMetrics"][0]["scopeMetrics"][0]["metrics"][0]["gauge"]["dataPoints"][0];
         assert_eq!(point["attributes"], json!([]));
+    }
+
+    #[test]
+    fn a_bounded_attribute_drops_the_point_when_its_value_is_not_declared() {
+        let list = Allowlist::parse(
+            r#"
+metrics: [ci.run.attempts]
+attributes: [branch_class]
+projects: []
+attribute_values:
+  branch_class: [trunk_main]
+"#,
+        )
+        .unwrap();
+        let point = |branch: &str| {
+            json!({
+                "asInt": "1",
+                "attributes": [{"key": "branch_class", "value": {"stringValue": branch}}]
+            })
+        };
+        let body = json!({
+            "resourceMetrics": [{
+                "scopeMetrics": [{
+                    "metrics": [{
+                        "name": "ci.run.attempts",
+                        "sum": {
+                            "aggregationTemporality": 1,
+                            "dataPoints": [point("trunk_main"), point("feat/whatever")]
+                        }
+                    }]
+                }]
+            }]
+        });
+        let (out, stats) =
+            prepare(&serde_json::to_vec(&body).unwrap(), &list, &envelope()).unwrap();
+        let out: Value = serde_json::from_slice(&out).unwrap();
+        assert_eq!(stats.points_dropped, 1);
+        let kept = out["resourceMetrics"][0]["scopeMetrics"][0]["metrics"][0]["sum"]["dataPoints"]
+            .as_array()
+            .unwrap();
+        assert_eq!(kept.len(), 1);
+        // The surviving point keeps its attribute rather than being merged
+        // into an unlabelled series.
+        assert_eq!(
+            kept[0]["attributes"][0]["value"]["stringValue"],
+            "trunk_main"
+        );
     }
 
     fn histogram_body(bucket_counts: Vec<Value>, explicit_bounds: Vec<Value>) -> Value {
