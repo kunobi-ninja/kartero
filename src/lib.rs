@@ -7,6 +7,7 @@
 //! An optional archive pass copies a different artifact prefix (kache benches:
 //! `bench-*`) onto a local directory, typically a PVC. It does not parse OTLP.
 
+pub mod actions;
 pub mod allowlist;
 pub mod archive;
 pub mod artifact;

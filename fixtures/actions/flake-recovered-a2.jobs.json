@@ -1,0 +1,1706 @@
+{
+  "jobs": [
+    {
+      "completed_at": "2026-08-20T20:27:26Z",
+      "conclusion": "success",
+      "created_at": "2026-08-20T20:01:19Z",
+      "labels": [
+        "zondax-runners"
+      ],
+      "name": "e2e / test",
+      "run_attempt": 2,
+      "runner_present": true,
+      "started_at": "2026-08-20T20:03:26Z",
+      "status": "completed",
+      "steps": [
+        {
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1
+        },
+        {
+          "conclusion": "success",
+          "name": "Initialize containers",
+          "number": 2
+        },
+        {
+          "conclusion": "success",
+          "name": "Bootstrap: Checkout",
+          "number": 3
+        },
+        {
+          "conclusion": "success",
+          "name": "Bootstrap: GCP auth",
+          "number": 4
+        },
+        {
+          "conclusion": "success",
+          "name": "Bootstrap: Cargo cache",
+          "number": 5
+        },
+        {
+          "conclusion": "success",
+          "name": "Bootstrap: mise toolchain",
+          "number": 6
+        },
+        {
+          "conclusion": "success",
+          "name": "Bootstrap: kache (Rust build cache)",
+          "number": 7
+        },
+        {
+          "conclusion": "success",
+          "name": "Bootstrap: Environment",
+          "number": 8
+        },
+        {
+          "conclusion": "success",
+          "name": "Bootstrap: Install dependencies",
+          "number": 9
+        },
+        {
+          "conclusion": "success",
+          "name": "Kobe: Lease ci-k3s-kunobi (1h TTL)",
+          "number": 10
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Kobe: Lease retry (fresh pool member after readiness timeout)",
+          "number": 11
+        },
+        {
+          "conclusion": "success",
+          "name": "Kobe: Export kubeconfig + e2e env",
+          "number": 12
+        },
+        {
+          "conclusion": "success",
+          "name": "Cluster: Pre-pull Kind node image (warmup for app-level tests)",
+          "number": 13
+        },
+        {
+          "conclusion": "success",
+          "name": "Bootstrap: Install protoc (required for gRPC feature)",
+          "number": 14
+        },
+        {
+          "conclusion": "success",
+          "name": "Build: Tauri frontend",
+          "number": 15
+        },
+        {
+          "conclusion": "success",
+          "name": "Build: Tauri binary (Rust)",
+          "number": 16
+        },
+        {
+          "conclusion": "success",
+          "name": "Serve: Start E2E servers (background)",
+          "number": 17
+        },
+        {
+          "conclusion": "success",
+          "name": "Gate: Wait for MCP server (port 3600)",
+          "number": 18
+        },
+        {
+          "conclusion": "success",
+          "name": "Bootstrap: Verify ffmpeg",
+          "number": 19
+        },
+        {
+          "conclusion": "success",
+          "name": "Test: Run E2E suite",
+          "number": 20
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Summary: E2E test failures",
+          "number": 21
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Cleanup: Show log summary",
+          "number": 22
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Cleanup: Capture cluster diagnostics",
+          "number": 23
+        },
+        {
+          "conclusion": "success",
+          "name": "Cleanup: Upload run log",
+          "number": 24
+        },
+        {
+          "conclusion": "success",
+          "name": "Cleanup: Upload screenshots",
+          "number": 25
+        },
+        {
+          "conclusion": "success",
+          "name": "Cleanup: Upload cluster diagnostics",
+          "number": 26
+        },
+        {
+          "conclusion": "success",
+          "name": "Cleanup: Upload timing report",
+          "number": 27
+        },
+        {
+          "conclusion": "success",
+          "name": "Cleanup: Stop servers",
+          "number": 28
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Kobe: Lease ci-k3s-kunobi (1h TTL)",
+          "number": 51
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Bootstrap: kache (Rust build cache)",
+          "number": 52
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Bootstrap: Cargo cache",
+          "number": 53
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Bootstrap: GCP auth",
+          "number": 54
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Bootstrap: Checkout",
+          "number": 55
+        },
+        {
+          "conclusion": "success",
+          "name": "Stop containers",
+          "number": 56
+        },
+        {
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 57
+        }
+      ]
+    },
+    {
+      "completed_at": "2026-08-20T19:25:40Z",
+      "conclusion": "success",
+      "created_at": "2026-08-20T20:01:20Z",
+      "labels": [
+        "zondax-runners"
+      ],
+      "name": "Git Best Practices",
+      "run_attempt": 2,
+      "runner_present": true,
+      "started_at": "2026-08-20T19:23:37Z",
+      "status": "completed",
+      "steps": [
+        {
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1
+        },
+        {
+          "conclusion": "success",
+          "name": "Checkout repository",
+          "number": 2
+        },
+        {
+          "conclusion": "success",
+          "name": "Setup mise",
+          "number": 3
+        },
+        {
+          "conclusion": "success",
+          "name": "Check Git Best Practices",
+          "number": 4
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Checkout repository",
+          "number": 8
+        },
+        {
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 9
+        }
+      ]
+    },
+    {
+      "completed_at": "2026-08-20T19:21:23Z",
+      "conclusion": "success",
+      "created_at": "2026-08-20T20:01:20Z",
+      "labels": [
+        "zondax-runners"
+      ],
+      "name": "Agent feature matrix",
+      "run_attempt": 2,
+      "runner_present": true,
+      "started_at": "2026-08-20T19:20:34Z",
+      "status": "completed",
+      "steps": [
+        {
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1
+        },
+        {
+          "conclusion": "success",
+          "name": "Initialize containers",
+          "number": 2
+        },
+        {
+          "conclusion": "success",
+          "name": "Checkout repository",
+          "number": 3
+        },
+        {
+          "conclusion": "success",
+          "name": "Check for agent-relevant changes",
+          "number": 4
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Setup mise toolchain",
+          "number": 5
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Setup kache",
+          "number": 6
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Install protoc",
+          "number": 7
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Check every feature combination",
+          "number": 8
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Checkout repository",
+          "number": 15
+        },
+        {
+          "conclusion": "success",
+          "name": "Stop containers",
+          "number": 16
+        },
+        {
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 17
+        }
+      ]
+    },
+    {
+      "completed_at": "2026-08-20T19:07:53Z",
+      "conclusion": "skipped",
+      "created_at": "2026-08-20T20:01:20Z",
+      "labels": [
+        "zondax-runners"
+      ],
+      "name": "Docs checks",
+      "run_attempt": 2,
+      "runner_present": false,
+      "started_at": "2026-08-20T20:01:20Z",
+      "status": "completed",
+      "steps": []
+    },
+    {
+      "completed_at": "2026-08-20T19:23:21Z",
+      "conclusion": "success",
+      "created_at": "2026-08-20T20:01:20Z",
+      "labels": [
+        "zondax-runners"
+      ],
+      "name": "Isolated Rust workspaces",
+      "run_attempt": 2,
+      "runner_present": true,
+      "started_at": "2026-08-20T19:22:35Z",
+      "status": "completed",
+      "steps": [
+        {
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1
+        },
+        {
+          "conclusion": "success",
+          "name": "Initialize containers",
+          "number": 2
+        },
+        {
+          "conclusion": "success",
+          "name": "Checkout repository",
+          "number": 3
+        },
+        {
+          "conclusion": "success",
+          "name": "Check for isolated-workspace changes",
+          "number": 4
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Setup mise toolchain",
+          "number": 5
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Setup kache",
+          "number": 6
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Install protoc",
+          "number": 7
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Format check",
+          "number": 8
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Clippy",
+          "number": 9
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Tests",
+          "number": 10
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Checkout repository",
+          "number": 19
+        },
+        {
+          "conclusion": "success",
+          "name": "Stop containers",
+          "number": 20
+        },
+        {
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 21
+        }
+      ]
+    },
+    {
+      "completed_at": "2026-08-20T19:55:19Z",
+      "conclusion": "success",
+      "created_at": "2026-08-20T20:01:20Z",
+      "labels": [
+        "zondax-runners"
+      ],
+      "name": "rs-checks-macos / post-coverage-comment / post-comment",
+      "run_attempt": 2,
+      "runner_present": true,
+      "started_at": "2026-08-20T19:55:14Z",
+      "status": "completed",
+      "steps": [
+        {
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1
+        },
+        {
+          "conclusion": "success",
+          "name": "Post or update PR comment",
+          "number": 2
+        },
+        {
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 3
+        }
+      ]
+    },
+    {
+      "completed_at": "2026-08-20T19:44:21Z",
+      "conclusion": "success",
+      "created_at": "2026-08-20T20:01:20Z",
+      "labels": [
+        "zondax-runners"
+      ],
+      "name": "ts-checks-linux / post-coverage-comment / post-comment",
+      "run_attempt": 2,
+      "runner_present": true,
+      "started_at": "2026-08-20T19:44:14Z",
+      "status": "completed",
+      "steps": [
+        {
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1
+        },
+        {
+          "conclusion": "success",
+          "name": "Post or update PR comment",
+          "number": 2
+        },
+        {
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 3
+        }
+      ]
+    },
+    {
+      "completed_at": "2026-08-20T19:45:30Z",
+      "conclusion": "success",
+      "created_at": "2026-08-20T20:01:20Z",
+      "labels": [
+        "zondax-runners"
+      ],
+      "name": "rs-checks-linux / post-coverage-comment / post-comment",
+      "run_attempt": 2,
+      "runner_present": true,
+      "started_at": "2026-08-20T19:45:23Z",
+      "status": "completed",
+      "steps": [
+        {
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1
+        },
+        {
+          "conclusion": "success",
+          "name": "Post or update PR comment",
+          "number": 2
+        },
+        {
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 3
+        }
+      ]
+    },
+    {
+      "completed_at": "2026-08-20T19:39:25Z",
+      "conclusion": "success",
+      "created_at": "2026-08-20T20:01:20Z",
+      "labels": [
+        "zondax-runners"
+      ],
+      "name": "variant-checks-linux",
+      "run_attempt": 2,
+      "runner_present": true,
+      "started_at": "2026-08-20T19:20:11Z",
+      "status": "completed",
+      "steps": [
+        {
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1
+        },
+        {
+          "conclusion": "success",
+          "name": "Initialize containers",
+          "number": 2
+        },
+        {
+          "conclusion": "success",
+          "name": "Checkout repository",
+          "number": 3
+        },
+        {
+          "conclusion": "success",
+          "name": "Install system deps",
+          "number": 4
+        },
+        {
+          "conclusion": "success",
+          "name": "Setup mise toolchain",
+          "number": 5
+        },
+        {
+          "conclusion": "success",
+          "name": "Install dependencies",
+          "number": 6
+        },
+        {
+          "conclusion": "success",
+          "name": "Provision minimal .env (gen:bindings requires the file to exist)",
+          "number": 7
+        },
+        {
+          "conclusion": "success",
+          "name": "Generate icons (dev overlay references icons/dev/*.png)",
+          "number": 8
+        },
+        {
+          "conclusion": "success",
+          "name": "Setup kache",
+          "number": 9
+        },
+        {
+          "conclusion": "success",
+          "name": "Check bindings drift (default variant)",
+          "number": 10
+        },
+        {
+          "conclusion": "success",
+          "name": "Check Tauri config drift",
+          "number": 11
+        },
+        {
+          "conclusion": "success",
+          "name": "Compile-check the second product",
+          "number": 12
+        },
+        {
+          "conclusion": "success",
+          "name": "Clippy lib + tests under non-default variants (dev, stable/unstable)",
+          "number": 13
+        },
+        {
+          "conclusion": "success",
+          "name": "Clippy without default features (grpc-off stub paths)",
+          "number": 14
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Setup kache",
+          "number": 26
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Checkout repository",
+          "number": 27
+        },
+        {
+          "conclusion": "success",
+          "name": "Stop containers",
+          "number": 28
+        },
+        {
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 29
+        }
+      ]
+    },
+    {
+      "completed_at": "2026-08-20T19:40:23Z",
+      "conclusion": "success",
+      "created_at": "2026-08-20T20:01:25Z",
+      "labels": [
+        "zondax-runners"
+      ],
+      "name": "ts-checks-linux / checks-ts",
+      "run_attempt": 2,
+      "runner_present": true,
+      "started_at": "2026-08-20T19:12:36Z",
+      "status": "completed",
+      "steps": [
+        {
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1
+        },
+        {
+          "conclusion": "success",
+          "name": "Initialize containers",
+          "number": 2
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Setup Ubuntu packages",
+          "number": 3
+        },
+        {
+          "conclusion": "success",
+          "name": "Checkout with GitHub App",
+          "number": 4
+        },
+        {
+          "conclusion": "success",
+          "name": "Check for cache control in PR title",
+          "number": 5
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Authenticate with GCP",
+          "number": 6
+        },
+        {
+          "conclusion": "success",
+          "name": "Setup mise",
+          "number": 7
+        },
+        {
+          "conclusion": "success",
+          "name": "Detect package manager",
+          "number": 8
+        },
+        {
+          "conclusion": "success",
+          "name": "Get pnpm store directory",
+          "number": 9
+        },
+        {
+          "conclusion": "success",
+          "name": "Cache pnpm store",
+          "number": 10
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Cache Bun dependencies",
+          "number": 11
+        },
+        {
+          "conclusion": "success",
+          "name": "Prune stale pnpm store entries",
+          "number": 12
+        },
+        {
+          "conclusion": "success",
+          "name": "Run ci_postinstall",
+          "number": 13
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Initialize environment",
+          "number": 14
+        },
+        {
+          "conclusion": "success",
+          "name": "Check format",
+          "number": 15
+        },
+        {
+          "conclusion": "success",
+          "name": "Run lint",
+          "number": 16
+        },
+        {
+          "conclusion": "success",
+          "name": "Run typecheck",
+          "number": 17
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Run tests",
+          "number": 18
+        },
+        {
+          "conclusion": "success",
+          "name": "Run tests with coverage",
+          "number": 19
+        },
+        {
+          "conclusion": "success",
+          "name": "Extract coverage metrics",
+          "number": 20
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Run integration tests",
+          "number": 21
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Save coverage baseline",
+          "number": 22
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Cache coverage baseline",
+          "number": 23
+        },
+        {
+          "conclusion": "success",
+          "name": "Restore coverage baseline",
+          "number": 24
+        },
+        {
+          "conclusion": "success",
+          "name": "Vitest Coverage Report",
+          "number": 25
+        },
+        {
+          "conclusion": "success",
+          "name": "Coverage regression check",
+          "number": 26
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Quality Gate - Test coverage shall be above threshold",
+          "number": 27
+        },
+        {
+          "conclusion": "success",
+          "name": "Diff coverage check",
+          "number": 28
+        },
+        {
+          "conclusion": "success",
+          "name": "Upload coverage reports as artifacts",
+          "number": 29
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Upload coverage reports to Codecov",
+          "number": 30
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Cache pnpm store",
+          "number": 58
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Checkout with GitHub App",
+          "number": 59
+        },
+        {
+          "conclusion": "success",
+          "name": "Stop containers",
+          "number": 60
+        },
+        {
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 61
+        }
+      ]
+    },
+    {
+      "completed_at": "2026-08-20T19:51:47Z",
+      "conclusion": "success",
+      "created_at": "2026-08-20T20:01:25Z",
+      "labels": [
+        "self-hosted",
+        "macOS",
+        "ARM64",
+        "mac-mini"
+      ],
+      "name": "rs-checks-macos / checks-rust",
+      "run_attempt": 2,
+      "runner_present": true,
+      "started_at": "2026-08-20T19:22:22Z",
+      "status": "completed",
+      "steps": [
+        {
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Setup Ubuntu packages",
+          "number": 2
+        },
+        {
+          "conclusion": "success",
+          "name": "Checkout with GitHub App",
+          "number": 3
+        },
+        {
+          "conclusion": "success",
+          "name": "Check for cache control in PR title",
+          "number": 4
+        },
+        {
+          "conclusion": "success",
+          "name": "Authenticate with GCP",
+          "number": 5
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Cache Cargo registry",
+          "number": 6
+        },
+        {
+          "conclusion": "success",
+          "name": "Setup mise",
+          "number": 7
+        },
+        {
+          "conclusion": "success",
+          "name": "Run ci_postinstall",
+          "number": 8
+        },
+        {
+          "conclusion": "success",
+          "name": "Detect package manager",
+          "number": 9
+        },
+        {
+          "conclusion": "success",
+          "name": "Initialize environment",
+          "number": 10
+        },
+        {
+          "conclusion": "success",
+          "name": "Setup kache",
+          "number": 11
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Setup Rust cache",
+          "number": 12
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Install cargo-tarpaulin for coverage",
+          "number": 13
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Install cargo-audit for security",
+          "number": 14
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Install cargo-deny for security",
+          "number": 15
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Install system dependencies",
+          "number": 16
+        },
+        {
+          "conclusion": "success",
+          "name": "Check formatting",
+          "number": 17
+        },
+        {
+          "conclusion": "success",
+          "name": "Run clippy",
+          "number": 18
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Run tests",
+          "number": 19
+        },
+        {
+          "conclusion": "success",
+          "name": "Run tests with coverage",
+          "number": 20
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Build integration test binaries",
+          "number": 21
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Run integration tests",
+          "number": 22
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Build",
+          "number": 23
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Security audit with cargo-audit",
+          "number": 24
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Security audit with cargo-deny",
+          "number": 25
+        },
+        {
+          "conclusion": "success",
+          "name": "Quality Gate - Test coverage shall be above threshold",
+          "number": 26
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Per-file coverage summary",
+          "number": 27
+        },
+        {
+          "conclusion": "success",
+          "name": "Upload coverage report as artifact",
+          "number": 28
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Save coverage baseline",
+          "number": 29
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Cache coverage baseline",
+          "number": 30
+        },
+        {
+          "conclusion": "success",
+          "name": "Restore coverage baseline",
+          "number": 31
+        },
+        {
+          "conclusion": "success",
+          "name": "Coverage regression check",
+          "number": 32
+        },
+        {
+          "conclusion": "success",
+          "name": "Diff coverage check",
+          "number": 33
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Fail workflow if coverage check failed",
+          "number": 34
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Setup kache",
+          "number": 65
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Authenticate with GCP",
+          "number": 66
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Checkout with GitHub App",
+          "number": 67
+        },
+        {
+          "conclusion": "success",
+          "name": "Complete runner",
+          "number": 68
+        },
+        {
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 69
+        }
+      ]
+    },
+    {
+      "completed_at": "2026-08-20T19:07:52Z",
+      "conclusion": "success",
+      "created_at": "2026-08-20T20:01:26Z",
+      "labels": [
+        "zondax-runners"
+      ],
+      "name": "changes",
+      "run_attempt": 2,
+      "runner_present": true,
+      "started_at": "2026-08-20T19:07:37Z",
+      "status": "completed",
+      "steps": [
+        {
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1
+        },
+        {
+          "conclusion": "success",
+          "name": "Run actions/checkout@v7",
+          "number": 2
+        },
+        {
+          "conclusion": "success",
+          "name": "Run set -euo pipefail",
+          "number": 3
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@v7",
+          "number": 6
+        },
+        {
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 7
+        }
+      ]
+    },
+    {
+      "completed_at": "2026-08-20T19:18:58Z",
+      "conclusion": "success",
+      "created_at": "2026-08-20T20:01:26Z",
+      "labels": [
+        "self-hosted",
+        "macOS",
+        "ARM64"
+      ],
+      "name": "ext-rs-checks-macos",
+      "run_attempt": 2,
+      "runner_present": true,
+      "started_at": "2026-08-20T19:07:55Z",
+      "status": "completed",
+      "steps": [
+        {
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1
+        },
+        {
+          "conclusion": "success",
+          "name": "Checkout repository",
+          "number": 2
+        },
+        {
+          "conclusion": "success",
+          "name": "Check for extension-relevant changes",
+          "number": 3
+        },
+        {
+          "conclusion": "success",
+          "name": "Setup Node environment",
+          "number": 4
+        },
+        {
+          "conclusion": "success",
+          "name": "Setup mise toolchain",
+          "number": 5
+        },
+        {
+          "conclusion": "success",
+          "name": "Format check",
+          "number": 6
+        },
+        {
+          "conclusion": "success",
+          "name": "Clippy",
+          "number": 7
+        },
+        {
+          "conclusion": "success",
+          "name": "Tests",
+          "number": 8
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Checkout repository",
+          "number": 15
+        },
+        {
+          "conclusion": "success",
+          "name": "Complete runner",
+          "number": 16
+        },
+        {
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 17
+        }
+      ]
+    },
+    {
+      "completed_at": "2026-08-20T19:04:07Z",
+      "conclusion": "success",
+      "created_at": "2026-08-20T20:01:27Z",
+      "labels": [
+        "zondax-runners"
+      ],
+      "name": "E2E-only filter detected",
+      "run_attempt": 2,
+      "runner_present": true,
+      "started_at": "2026-08-20T19:04:01Z",
+      "status": "completed",
+      "steps": [
+        {
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Reject filtered CI as a complete validation",
+          "number": 2
+        },
+        {
+          "conclusion": "success",
+          "name": "Confirm full CI is enabled",
+          "number": 3
+        },
+        {
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 4
+        }
+      ]
+    },
+    {
+      "completed_at": "2026-08-20T19:24:59Z",
+      "conclusion": "success",
+      "created_at": "2026-08-20T20:01:28Z",
+      "labels": [
+        "zondax-runners"
+      ],
+      "name": "ext-rs-checks-linux",
+      "run_attempt": 2,
+      "runner_present": true,
+      "started_at": "2026-08-20T19:15:41Z",
+      "status": "completed",
+      "steps": [
+        {
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1
+        },
+        {
+          "conclusion": "success",
+          "name": "Initialize containers",
+          "number": 2
+        },
+        {
+          "conclusion": "success",
+          "name": "Checkout repository",
+          "number": 3
+        },
+        {
+          "conclusion": "success",
+          "name": "Check for extension-relevant changes",
+          "number": 4
+        },
+        {
+          "conclusion": "success",
+          "name": "Setup mise toolchain",
+          "number": 5
+        },
+        {
+          "conclusion": "success",
+          "name": "Setup kache",
+          "number": 6
+        },
+        {
+          "conclusion": "success",
+          "name": "Format check",
+          "number": 7
+        },
+        {
+          "conclusion": "success",
+          "name": "Clippy",
+          "number": 8
+        },
+        {
+          "conclusion": "success",
+          "name": "Tests",
+          "number": 9
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Setup kache",
+          "number": 16
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Checkout repository",
+          "number": 17
+        },
+        {
+          "conclusion": "success",
+          "name": "Stop containers",
+          "number": 18
+        },
+        {
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 19
+        }
+      ]
+    },
+    {
+      "completed_at": "2026-08-20T19:14:03Z",
+      "conclusion": "success",
+      "created_at": "2026-08-20T20:01:28Z",
+      "labels": [
+        "self-hosted",
+        "macOS",
+        "ARM64"
+      ],
+      "name": "variant-checks-macos",
+      "run_attempt": 2,
+      "runner_present": true,
+      "started_at": "2026-08-20T19:09:47Z",
+      "status": "completed",
+      "steps": [
+        {
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1
+        },
+        {
+          "conclusion": "success",
+          "name": "Checkout repository",
+          "number": 2
+        },
+        {
+          "conclusion": "success",
+          "name": "Setup Node environment",
+          "number": 3
+        },
+        {
+          "conclusion": "success",
+          "name": "Setup mise toolchain",
+          "number": 4
+        },
+        {
+          "conclusion": "success",
+          "name": "Install dependencies",
+          "number": 5
+        },
+        {
+          "conclusion": "success",
+          "name": "Provision minimal .env (build.rs requires the file to exist)",
+          "number": 6
+        },
+        {
+          "conclusion": "success",
+          "name": "Generate icons (dev overlay references icons/dev/*.png)",
+          "number": 7
+        },
+        {
+          "conclusion": "success",
+          "name": "Setup kache (local store only)",
+          "number": 8
+        },
+        {
+          "conclusion": "success",
+          "name": "Clippy lib + tests under non-default variants (dev, stable/unstable)",
+          "number": 9
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Setup kache (local store only)",
+          "number": 16
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Checkout repository",
+          "number": 17
+        },
+        {
+          "conclusion": "success",
+          "name": "Complete runner",
+          "number": 18
+        },
+        {
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 19
+        }
+      ]
+    },
+    {
+      "completed_at": "2026-08-20T19:17:13Z",
+      "conclusion": "success",
+      "created_at": "2026-08-20T20:01:28Z",
+      "labels": [
+        "zondax-runners"
+      ],
+      "name": "Canvas runtime build",
+      "run_attempt": 2,
+      "runner_present": true,
+      "started_at": "2026-08-20T19:14:58Z",
+      "status": "completed",
+      "steps": [
+        {
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1
+        },
+        {
+          "conclusion": "success",
+          "name": "Initialize containers",
+          "number": 2
+        },
+        {
+          "conclusion": "success",
+          "name": "Checkout repository",
+          "number": 3
+        },
+        {
+          "conclusion": "success",
+          "name": "Setup mise toolchain",
+          "number": 4
+        },
+        {
+          "conclusion": "success",
+          "name": "Install dependencies",
+          "number": 5
+        },
+        {
+          "conclusion": "success",
+          "name": "Build host-free runtime",
+          "number": 6
+        },
+        {
+          "conclusion": "success",
+          "name": "Verify the bundle the ui:// provider reads is staged",
+          "number": 7
+        },
+        {
+          "conclusion": "success",
+          "name": "Verify no host transport survives in the bundle",
+          "number": 8
+        },
+        {
+          "conclusion": "success",
+          "name": "Check the bundle against its size budget",
+          "number": 9
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Checkout repository",
+          "number": 17
+        },
+        {
+          "conclusion": "success",
+          "name": "Stop containers",
+          "number": 18
+        },
+        {
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 19
+        }
+      ]
+    },
+    {
+      "completed_at": "2026-08-20T19:22:03Z",
+      "conclusion": "success",
+      "created_at": "2026-08-20T20:01:28Z",
+      "labels": [
+        "zondax-runners"
+      ],
+      "name": "Ordering Stamp Partition",
+      "run_attempt": 2,
+      "runner_present": true,
+      "started_at": "2026-08-20T19:21:52Z",
+      "status": "completed",
+      "steps": [
+        {
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1
+        },
+        {
+          "conclusion": "success",
+          "name": "Checkout repository",
+          "number": 2
+        },
+        {
+          "conclusion": "success",
+          "name": "Enforce source-partitioned ordering stamps",
+          "number": 3
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Checkout repository",
+          "number": 6
+        },
+        {
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 7
+        }
+      ]
+    },
+    {
+      "completed_at": "2026-08-20T19:44:19Z",
+      "conclusion": "success",
+      "created_at": "2026-08-20T20:01:30Z",
+      "labels": [
+        "zondax-runners"
+      ],
+      "name": "rs-checks-linux / checks-rust",
+      "run_attempt": 2,
+      "runner_present": true,
+      "started_at": "2026-08-20T19:26:57Z",
+      "status": "completed",
+      "steps": [
+        {
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1
+        },
+        {
+          "conclusion": "success",
+          "name": "Initialize containers",
+          "number": 2
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Setup Ubuntu packages",
+          "number": 3
+        },
+        {
+          "conclusion": "success",
+          "name": "Checkout with GitHub App",
+          "number": 4
+        },
+        {
+          "conclusion": "success",
+          "name": "Check for cache control in PR title",
+          "number": 5
+        },
+        {
+          "conclusion": "success",
+          "name": "Authenticate with GCP",
+          "number": 6
+        },
+        {
+          "conclusion": "success",
+          "name": "Cache Cargo registry",
+          "number": 7
+        },
+        {
+          "conclusion": "success",
+          "name": "Setup mise",
+          "number": 8
+        },
+        {
+          "conclusion": "success",
+          "name": "Run ci_postinstall",
+          "number": 9
+        },
+        {
+          "conclusion": "success",
+          "name": "Detect package manager",
+          "number": 10
+        },
+        {
+          "conclusion": "success",
+          "name": "Initialize environment",
+          "number": 11
+        },
+        {
+          "conclusion": "success",
+          "name": "Setup kache",
+          "number": 12
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Setup Rust cache",
+          "number": 13
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Install cargo-tarpaulin for coverage",
+          "number": 14
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Install cargo-audit for security",
+          "number": 15
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Install cargo-deny for security",
+          "number": 16
+        },
+        {
+          "conclusion": "success",
+          "name": "Install system dependencies",
+          "number": 17
+        },
+        {
+          "conclusion": "success",
+          "name": "Check formatting",
+          "number": 18
+        },
+        {
+          "conclusion": "success",
+          "name": "Run clippy",
+          "number": 19
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Run tests",
+          "number": 20
+        },
+        {
+          "conclusion": "success",
+          "name": "Run tests with coverage",
+          "number": 21
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Build integration test binaries",
+          "number": 22
+        },
+        {
+          "conclusion": "success",
+          "name": "Run integration tests",
+          "number": 23
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Build",
+          "number": 24
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Security audit with cargo-audit",
+          "number": 25
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Security audit with cargo-deny",
+          "number": 26
+        },
+        {
+          "conclusion": "success",
+          "name": "Quality Gate - Test coverage shall be above threshold",
+          "number": 27
+        },
+        {
+          "conclusion": "success",
+          "name": "Per-file coverage summary",
+          "number": 28
+        },
+        {
+          "conclusion": "success",
+          "name": "Upload coverage report as artifact",
+          "number": 29
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Save coverage baseline",
+          "number": 30
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Cache coverage baseline",
+          "number": 31
+        },
+        {
+          "conclusion": "success",
+          "name": "Restore coverage baseline",
+          "number": 32
+        },
+        {
+          "conclusion": "success",
+          "name": "Coverage regression check",
+          "number": 33
+        },
+        {
+          "conclusion": "success",
+          "name": "Diff coverage check",
+          "number": 34
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Fail workflow if coverage check failed",
+          "number": 35
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Setup kache",
+          "number": 66
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Cache Cargo registry",
+          "number": 67
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Authenticate with GCP",
+          "number": 68
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Checkout with GitHub App",
+          "number": 69
+        },
+        {
+          "conclusion": "success",
+          "name": "Stop containers",
+          "number": 70
+        },
+        {
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 71
+        }
+      ]
+    },
+    {
+      "completed_at": "2026-08-20T20:27:38Z",
+      "conclusion": "success",
+      "created_at": "2026-08-20T20:27:26Z",
+      "labels": [
+        "ubuntu-latest"
+      ],
+      "name": "e2e / post-assets-to-pr",
+      "run_attempt": 2,
+      "runner_present": true,
+      "started_at": "2026-08-20T20:27:28Z",
+      "status": "completed",
+      "steps": [
+        {
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1
+        },
+        {
+          "conclusion": "success",
+          "name": "Download screenshots",
+          "number": 2
+        },
+        {
+          "conclusion": "success",
+          "name": "Post PR comment with screenshots",
+          "number": 3
+        },
+        {
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 4
+        }
+      ]
+    },
+    {
+      "completed_at": "2026-08-20T20:29:57Z",
+      "conclusion": "success",
+      "created_at": "2026-08-20T20:27:39Z",
+      "labels": [
+        "zondax-runners"
+      ],
+      "name": "CI Gate",
+      "run_attempt": 2,
+      "runner_present": true,
+      "started_at": "2026-08-20T20:29:52Z",
+      "status": "completed",
+      "steps": [
+        {
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1
+        },
+        {
+          "conclusion": "success",
+          "name": "Verify no job failed",
+          "number": 2
+        },
+        {
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 3
+        }
+      ]
+    }
+  ],
+  "total_count": 21
+}

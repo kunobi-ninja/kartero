@@ -256,6 +256,7 @@ mod tests {
                 repo: "kache".into(),
                 workflows: vec!["bench.yml".into()],
                 trusted_branch: "main".into(),
+                actions: None,
             }],
             otlp_endpoint: "http://127.0.0.1:4318".into(),
             allowlist_path: "/etc/kartero/allowlist.yaml".into(),
