@@ -686,6 +686,68 @@ attribute_values:
         assert_eq!(stats.points_dropped, 0);
     }
 
+    /// The derived path builds its own body and must go through this filter
+    /// like any producer's. It did not, and the omission was documented as
+    /// though it had: an undeclared name would have been delivered, and the
+    /// trusted-run envelope that tells a derived series apart was missing.
+    #[test]
+    fn a_derived_payload_is_filtered_and_stamped_like_any_other() {
+        let list = Allowlist::parse(
+            "metrics: [ci.run.attempts]\nattributes: [branch_class]\nprojects: []\n",
+        )
+        .unwrap();
+        let body = json!({
+            "resourceMetrics": [{
+                "resource": {"attributes": [
+                    {"key": "service.name", "value": {"stringValue": "github-actions-ci"}}
+                ]},
+                "scopeMetrics": [{
+                    "metrics": [
+                        {
+                            "name": "ci.run.attempts",
+                            "sum": {"aggregationTemporality": 1, "dataPoints": [
+                                {"asInt": "1", "attributes": [
+                                    {"key": "branch_class", "value": {"stringValue": "trunk_dev"}}
+                                ]}
+                            ]}
+                        },
+                        {
+                            "name": "ci.run.invented_by_a_deriver",
+                            "sum": {"aggregationTemporality": 1, "dataPoints": [
+                                {"asInt": "1", "attributes": []}
+                            ]}
+                        }
+                    ]
+                }]
+            }]
+        });
+        let (out, stats) =
+            prepare(&serde_json::to_vec(&body).unwrap(), &list, &envelope()).unwrap();
+        let out: Value = serde_json::from_slice(&out).unwrap();
+
+        // An undeclared name is dropped even though this process derived it.
+        assert_eq!(stats.metrics_kept, 1);
+        assert_eq!(stats.metrics_dropped, 1);
+        let names: Vec<_> = out["resourceMetrics"][0]["scopeMetrics"][0]["metrics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, vec!["ci.run.attempts"]);
+
+        // And the trusted-run envelope is stamped, which is what tells a
+        // derived series from a direct push claiming the same metric.
+        let keys: Vec<_> = out["resourceMetrics"][0]["resource"]["attributes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|a| a["key"].as_str().unwrap())
+            .collect();
+        assert!(keys.contains(&"vcs.repository.url.full"), "{keys:?}");
+        assert!(keys.contains(&"cicd.pipeline.name"), "{keys:?}");
+    }
+
     fn histogram_body(bucket_counts: Vec<Value>, explicit_bounds: Vec<Value>) -> Value {
         json!({
             "resourceMetrics": [{
