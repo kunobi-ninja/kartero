@@ -130,13 +130,40 @@ than stopping, and a series that stops being written means the scrape stopped
 rather than the source recovering.
 
 `kartero_source_listing_failures_total{source, kind}` says which kind of
-failure. `kind="not_found"` will not resolve on its own: the repository or the
-workflow file does not exist, or that source's token cannot see the
-repository. GitHub answers 404 rather than 403 for a private repository a
-token cannot see, so a missing grant and a missing file are indistinguishable
-from the outside — check the token first, since it is the more common of the
-two. These are logged at ERROR naming the source; ordinary transport failures
-stay at WARN.
+failure. Three kinds will not resolve on their own, and all are logged at
+ERROR naming the source; ordinary transport failures stay at WARN.
+
+| `kind` | Status | Usually means |
+| --- | --- | --- |
+| `not_found` | 404 | The repository or workflow file does not exist, or the token cannot see the repository. GitHub answers 404 rather than 403 for a private repository a token cannot see, so a missing grant and a missing file are indistinguishable — check the token first. |
+| `unauthorized` | 401 | The token has expired or been revoked. |
+| `forbidden` | 403 | An organisation approval or a permission has been withdrawn. |
+
+A 403 carrying an exhausted quota is a secondary rate limit and stays
+transient, told apart by `x-ratelimit-remaining` or `Retry-After`. Treating
+one as permanent would flip a healthy source to misconfigured during a busy
+hour.
+
+## Before a token expires
+
+```
+kartero_source_token_expires_timestamp_seconds{source} - time() < 14 * 86400
+```
+
+GitHub reports a token's expiry on every response that carries it, so this is
+recorded on each pass, whether or not the listing succeeded — knowing a token
+is days from lapsing is most useful while it still works.
+
+The series is **absent for tokens that never expire**, which is a real answer
+rather than a missing one. Absence therefore means either no expiry or no pass
+yet; `kartero_source_up` distinguishes those.
+
+It is an absolute instant rather than a countdown on purpose. A "seconds
+remaining" gauge is wrong the moment scraping stops and right only by
+accident, so subtract `time()` at query time.
+
+The same reaches OTLP as `kartero.collect.source_token_expires`, in seconds,
+with the source in `kartero.source`.
 
 Readiness deliberately does not fail on this. The Prometheus endpoint is
 served by the same process, so making the pod unready would remove it from
