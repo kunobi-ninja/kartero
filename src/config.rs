@@ -45,12 +45,27 @@ pub struct ActionsConfig {
     /// inside the mergeability clock, because a PR is not mergeable until it
     /// concludes.
     pub gate_job: String,
+    /// The job whose deliberate failure means the attempt says something about
+    /// the pull request rather than about the pipeline.
+    pub guard_job: String,
+    /// The step that replaced the guard job once it was folded into the gate.
+    pub guard_step: String,
+    /// The path-filter job every skip reason keys on. Its absence is reported
+    /// rather than absorbed, because a rename degrades every reason silently.
+    pub filter_job: String,
+    /// The job a docs-only change skips.
+    pub docs_job: String,
+    /// Declared job names. Anything else collapses to `other` and raises an
+    /// anomaly, rather than opening a series nobody approved.
+    #[allow(clippy::doc_markdown)]
+    pub canonical_jobs: Vec<String>,
     /// Name variants of one logical job, mapped onto a single series. A
     /// reusable caller reports its bare id when skipped and a composite when
     /// it ran, so without this the two halves of one job land apart.
     pub job_aliases: BTreeMap<String, String>,
-    /// Workflows whose conclusions are inverted by design, such as a nightly
-    /// flake detector where green means it measured and red means it broke.
+    /// Workflow *paths* whose conclusions are inverted by design, such as a
+    /// nightly flake detector where green means it measured and red means the
+    /// detector broke. Excluded whole, not per job.
     pub excluded_workflows: Vec<String>,
 }
 
@@ -115,6 +130,12 @@ struct FileActions {
     #[serde(default)]
     branch_classes: BTreeMap<String, String>,
     gate_job: String,
+    guard_job: String,
+    guard_step: String,
+    filter_job: String,
+    docs_job: String,
+    #[serde(default)]
+    canonical_jobs: Vec<String>,
     #[serde(default)]
     job_aliases: BTreeMap<String, String>,
     #[serde(default)]
@@ -279,6 +300,11 @@ fn resolve_sources(
             actions: file.actions.map(|actions| ActionsConfig {
                 branch_classes: actions.branch_classes,
                 gate_job: actions.gate_job,
+                guard_job: actions.guard_job,
+                guard_step: actions.guard_step,
+                filter_job: actions.filter_job,
+                docs_job: actions.docs_job,
+                canonical_jobs: actions.canonical_jobs,
                 job_aliases: actions.job_aliases,
                 excluded_workflows: actions.excluded_workflows,
             }),

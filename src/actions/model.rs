@@ -27,6 +27,7 @@ pub struct Repository {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct JobStep {
+    pub name: String,
     pub conclusion: Option<String>,
 }
 
@@ -37,6 +38,10 @@ pub struct Job {
     pub created_at: String,
     pub started_at: Option<String>,
     pub completed_at: Option<String>,
+    /// False when the job never reached a runner, so its timestamps describe
+    /// a wait rather than work.
+    #[serde(default)]
+    pub runner_present: bool,
     #[serde(default)]
     pub labels: Vec<String>,
     #[serde(default)]
@@ -86,6 +91,8 @@ pub enum Anomaly {
     Attempt1ClockMismatch,
     GateMissing,
     UnusableTimestamp,
+    UnknownJobName,
+    FilterJobMissing,
 }
 
 impl Anomaly {
@@ -96,6 +103,8 @@ impl Anomaly {
             Self::Attempt1ClockMismatch => "attempt1_clock_mismatch",
             Self::GateMissing => "gate_missing",
             Self::UnusableTimestamp => "unusable_timestamp",
+            Self::UnknownJobName => "unknown_job_name",
+            Self::FilterJobMissing => "filter_job_missing",
         }
     }
 }

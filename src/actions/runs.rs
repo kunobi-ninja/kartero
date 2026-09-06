@@ -48,18 +48,6 @@ fn did_work_this_attempt(job: &Job, config: &ActionsConfig) -> bool {
         && !is_carried_forward(job)
 }
 
-/// A guard job that failed on purpose fails the whole run with it. Counting
-/// that attempt would put a deliberate signal into the run failure rate.
-fn is_intentional_failure(jobs: &[Job], config: &ActionsConfig) -> bool {
-    jobs.iter().any(|job| {
-        config
-            .excluded_workflows
-            .iter()
-            .any(|name| name == &job.name)
-            && job.conclusion.as_deref() == Some("failure")
-    })
-}
-
 pub fn derive(run: &RunAttempt, jobs: &JobsPayload, config: &ActionsConfig) -> Derivation {
     let mut out = Derivation::default();
 
@@ -69,7 +57,7 @@ pub fn derive(run: &RunAttempt, jobs: &JobsPayload, config: &ActionsConfig) -> D
         out.anomalies.push(Anomaly::RunNotCompleted);
         return out;
     }
-    if is_intentional_failure(&jobs.jobs, config) {
+    if super::jobs::is_intentional_failure(&jobs.jobs, config) {
         out.anomalies.push(Anomaly::IntentionalFailureAttempt);
         return out;
     }
