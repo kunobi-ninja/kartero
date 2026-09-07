@@ -1,0 +1,47 @@
+{
+  "_comment": "Maps the name variants of one logical job onto a single series. A reusable caller reports its bare id when skipped and a composite when it ran, so without this the skipped and executed halves of the same job land on different series. Retired names remain canonical while the rolling collector and recorded fixtures still contain their historical runs. Regenerating fixtures does not update this file; a job rename must be reflected here in the same change, which checkers/ci-job-names.test.ts enforces for the jobs defined in this repository. The three callers that live in an external workflow on a mutable tag cannot be checked at build time, so their composite spellings are pinned here as constants and a renamed one surfaces at runtime as an unknown job name.",
+  "canonical": [
+    "Agent feature matrix",
+    "changes",
+    "CI Gate",
+    "Dependabot CI policy",
+    "Docs checks",
+    "e2e",
+    "e2e / post-assets-to-pr",
+    "Export coverage telemetry",
+    "E2E-only filter detected",
+    "ext-rs-checks-linux",
+    "ext-rs-checks-macos",
+    "Extension Dev Profile",
+    "Git Best Practices",
+    "Isolated Rust workspaces",
+    "Ordering Stamp Partition",
+    "Relay tests on Windows",
+    "rs-checks-linux",
+    "rs-checks-linux / post-coverage-comment",
+    "rs-checks-macos",
+    "rs-checks-macos / post-coverage-comment",
+    "Rust supply-chain audit",
+    "ts-checks-linux",
+    "ts-checks-linux / post-coverage-comment",
+    "variant-checks-linux",
+    "variant-checks-macos"
+  ],
+  "retired": [
+    "Dependabot CI policy",
+    "E2E-only filter detected",
+    "Extension Dev Profile",
+    "Ordering Stamp Partition",
+    "variant-checks-macos"
+  ],
+  "aliases": {
+    "Relay and runtime tests on Windows": "Relay tests on Windows",
+    "e2e / test": "e2e",
+    "ts-checks-linux / checks-ts": "ts-checks-linux",
+    "rs-checks-linux / checks-rust": "rs-checks-linux",
+    "rs-checks-macos / checks-rust": "rs-checks-macos",
+    "ts-checks-linux / post-coverage-comment / post-comment": "ts-checks-linux / post-coverage-comment",
+    "rs-checks-linux / post-coverage-comment / post-comment": "rs-checks-linux / post-coverage-comment",
+    "rs-checks-macos / post-coverage-comment / post-comment": "rs-checks-macos / post-coverage-comment"
+  }
+}

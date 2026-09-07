@@ -18,6 +18,7 @@ pub mod emit;
 pub mod flake;
 pub mod jobs;
 pub mod model;
+pub mod names;
 pub mod runs;
 
 pub use model::{Anomaly, Derivation, Instrument, Job, JobsPayload, Point, RunAttempt};
@@ -70,6 +71,7 @@ mod tests {
             canonical_jobs: Vec::new(),
             job_aliases: BTreeMap::new(),
             excluded_workflows: Vec::new(),
+            job_names_path: None,
         }
     }
 
