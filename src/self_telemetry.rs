@@ -17,6 +17,18 @@ pub struct SourceStatus {
     pub up: bool,
 }
 
+/// Something a derivation had to give up on, counted per source and kind.
+///
+/// A rule that starts firing constantly is why a panel would go flat: a
+/// renamed job producing `unknown_job_name`, a gate that stopped being found.
+/// Without this, a renamed job and a quiet week look identical.
+#[derive(Debug, Clone)]
+pub struct AnomalyCount {
+    pub slug: String,
+    pub kind: String,
+    pub count: u64,
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct CollectSnapshot {
     pub duration_s: f64,
@@ -42,6 +54,28 @@ pub struct CollectSnapshot {
     pub source_status: Vec<SourceStatus>,
     /// `(source, unix seconds)` for tokens that expire.
     pub token_expiry: Vec<(String, i64)>,
+    /// What the derivations had to throw away this pass, and why.
+    pub anomalies: Vec<AnomalyCount>,
+}
+
+impl CollectSnapshot {
+    /// Record one anomaly, accumulating onto the source and kind already
+    /// present rather than opening a second entry for it.
+    pub fn inc_anomaly(&mut self, slug: &str, kind: &str) {
+        if let Some(existing) = self
+            .anomalies
+            .iter_mut()
+            .find(|a| a.slug == slug && a.kind == kind)
+        {
+            existing.count += 1;
+            return;
+        }
+        self.anomalies.push(AnomalyCount {
+            slug: slug.to_string(),
+            kind: kind.to_string(),
+            count: 1,
+        });
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -109,6 +143,7 @@ pub fn serialize(snapshot: &CollectSnapshot) -> Value {
                     gauge("kartero.collect.attempts_derived", "{attempt}", vec![as_int(snapshot.attempts_derived, &time, &run_attrs)]),
                     gauge("kartero.collect.source_up", "1", source_points(snapshot, &time)),
                     gauge("kartero.collect.source_token_expires", "s", token_expiry_points(snapshot, &time)),
+                    gauge("kartero.collect.anomalies", "{anomaly}", anomaly_points(snapshot, &time)),
                     gauge("kartero.collect.runs", "{run}", vec![
                         as_int(snapshot.runs_seen, &time, &[str_attr("kartero.run.state", "seen")]),
                         as_int(snapshot.runs_trusted, &time, &[str_attr("kartero.run.state", "trusted")]),
@@ -291,6 +326,28 @@ fn source_points(snapshot: &CollectSnapshot, time: &str) -> Vec<Value> {
         .collect()
 }
 
+/// One point per source and anomaly kind seen this pass.
+///
+/// Both attributes are bounded: the source slugs are configured, and the kind
+/// comes from a fixed enum. A pass with nothing to report writes no points, so
+/// the series is absent rather than zero — read it with `increase`.
+fn anomaly_points(snapshot: &CollectSnapshot, time: &str) -> Vec<Value> {
+    snapshot
+        .anomalies
+        .iter()
+        .map(|anomaly| {
+            as_int(
+                anomaly.count,
+                time,
+                &[
+                    str_attr("kartero.source", &anomaly.slug),
+                    str_attr("kartero.anomaly", &anomaly.kind),
+                ],
+            )
+        })
+        .collect()
+}
+
 fn token_expiry_points(snapshot: &CollectSnapshot, time: &str) -> Vec<Value> {
     snapshot
         .token_expiry
@@ -365,6 +422,11 @@ mod tests {
             points_dropped: 4,
             github_errors: 1,
             ingest_errors: 2,
+            anomalies: vec![AnomalyCount {
+                slug: "Zondax/kunobi-frontend".into(),
+                kind: "unknown_job_name".into(),
+                count: 3,
+            }],
         });
         assert_eq!(
             body["resourceMetrics"][0]["resource"]["attributes"][0]["value"]["stringValue"],
@@ -384,6 +446,7 @@ mod tests {
         assert!(names.contains(&"kartero.collect.attempts_derived"));
         assert!(names.contains(&"kartero.collect.source_token_expires"));
         assert!(names.contains(&"kartero.collect.errors"));
+        assert!(names.contains(&"kartero.collect.anomalies"));
         let dumped = body.to_string();
         assert!(!dumped.contains("cicd."));
         assert!(!dumped.contains("run_id"));
@@ -391,6 +454,77 @@ mod tests {
             &body["resourceMetrics"][0]["scopeMetrics"][0]["metrics"][0]["gauge"]["dataPoints"][0];
         assert!(duration["timeUnixNano"].is_string());
         assert_eq!(duration["asDouble"], 1.5);
+    }
+
+    /// The name being in the list proves only that a gauge was declared. What
+    /// matters is that the point carries a count and both bounded attributes:
+    /// an anomaly nobody can attribute to a source and a kind is as useless as
+    /// one that was never emitted.
+    #[test]
+    fn anomaly_points_carry_the_source_the_kind_and_a_count() {
+        let mut snapshot = CollectSnapshot::default();
+        snapshot.inc_anomaly("Zondax/kunobi-frontend", "unknown_job_name");
+        snapshot.inc_anomaly("Zondax/kunobi-frontend", "unknown_job_name");
+        snapshot.inc_anomaly("Zondax/kunobi-frontend", "gate_missing");
+        snapshot.inc_anomaly("kunobi-ninja/kache", "unknown_job_name");
+
+        let body = serialize(&snapshot);
+        let metrics = body["resourceMetrics"][0]["scopeMetrics"][0]["metrics"]
+            .as_array()
+            .unwrap()
+            .clone();
+        let anomalies = metrics
+            .iter()
+            .find(|m| m["name"] == "kartero.collect.anomalies")
+            .expect("anomalies gauge");
+        let points = anomalies["gauge"]["dataPoints"].as_array().unwrap();
+        assert_eq!(points.len(), 3, "one point per source and kind seen");
+
+        let read = |point: &Value, key: &str| -> String {
+            point["attributes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|a| a["key"] == key)
+                .unwrap_or_else(|| panic!("{key} missing from an anomaly point"))["value"]
+                ["stringValue"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        };
+
+        let repeated = points
+            .iter()
+            .find(|p| {
+                read(p, "kartero.source") == "Zondax/kunobi-frontend"
+                    && read(p, "kartero.anomaly") == "unknown_job_name"
+            })
+            .expect("the repeated anomaly");
+        // Two occurrences accumulate onto one point rather than opening a
+        // second entry for the same source and kind.
+        assert_eq!(repeated["asInt"], "2");
+
+        let once = points
+            .iter()
+            .find(|p| read(p, "kartero.anomaly") == "gate_missing")
+            .expect("the single anomaly");
+        assert_eq!(once["asInt"], "1");
+        assert_eq!(read(once, "kartero.source"), "Zondax/kunobi-frontend");
+    }
+
+    /// A pass with nothing to report writes no points, so the series is absent
+    /// rather than a row of zeroes. Reading it with `increase` depends on that.
+    #[test]
+    fn a_clean_pass_emits_no_anomaly_points() {
+        let body = serialize(&CollectSnapshot::default());
+        let anomalies = body["resourceMetrics"][0]["scopeMetrics"][0]["metrics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["name"] == "kartero.collect.anomalies")
+            .expect("anomalies gauge")
+            .clone();
+        assert!(anomalies["gauge"]["dataPoints"].as_array().unwrap().is_empty());
     }
 
     #[test]

@@ -218,6 +218,19 @@ async fn derive_actions(
                     actions,
                 );
                 derived.points.extend(flake.points);
+                for anomaly in flake.anomalies {
+                    derived.anomalies.push(anomaly);
+                }
+            }
+
+            // Reported rather than discarded. Every one of these means a point
+            // that could have existed does not, and the commonest of them --
+            // a job renamed without `canonicalJobs` following -- shows up
+            // nowhere else: the series simply stops, which looks the same as a
+            // repository nobody pushed to this week.
+            for anomaly in &derived.anomalies {
+                metrics.inc_anomaly(&source.slug(), anomaly.as_str());
+                snapshot.inc_anomaly(&source.slug(), anomaly.as_str());
             }
 
             if !derived.points.is_empty() {
