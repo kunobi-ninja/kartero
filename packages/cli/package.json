@@ -1,6 +1,6 @@
 {
   "name": "@kunobi/kartero",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "description": "Generate validated Kartero OTLP artifacts from CI reports.",
   "license": "Apache-2.0",
   "type": "module",
