@@ -15,6 +15,62 @@ pub struct ArtifactPayload {
     pub metrics_json: Vec<u8>,
 }
 
+/// One named file out of an artifact zip, under the same bounds as a metrics
+/// payload.
+///
+/// Used for the job names a repository declares. It travels as an artifact
+/// rather than through the contents API on purpose: reading a file from a
+/// private repository needs `contents: read`, which is the whole source tree,
+/// where this collector otherwise needs only `actions: read`. A 3 KB list of
+/// job names does not justify handing a telemetry collector the code.
+pub fn open_named(bytes: &[u8], want: &str) -> Result<Vec<u8>> {
+    if bytes.len() > MAX_ZIP_BYTES {
+        bail!(
+            "artifact zip is {} bytes, over the {MAX_ZIP_BYTES} bound",
+            bytes.len()
+        );
+    }
+    let mut zip = ZipArchive::new(Cursor::new(bytes))?;
+    if zip.len() > MAX_ENTRIES {
+        bail!(
+            "artifact has {} entries, over the {MAX_ENTRIES} bound",
+            zip.len()
+        );
+    }
+    let mut found = None;
+    let mut uncompressed_total = 0u64;
+    for i in 0..zip.len() {
+        let mut entry = zip.by_index(i)?;
+        let name = entry.name().to_string();
+        if name.contains("..") || name.starts_with('/') || name.starts_with('\\') {
+            bail!("artifact entry {name} is not a safe path");
+        }
+        if name.contains('/') || name.contains('\\') {
+            bail!("artifact entry {name} is nested; only root files are accepted");
+        }
+        if entry.is_dir() {
+            continue;
+        }
+        uncompressed_total = uncompressed_total.saturating_add(entry.size());
+        if uncompressed_total > MAX_UNCOMPRESSED_BYTES {
+            bail!("artifact uncompressed size exceeds {MAX_UNCOMPRESSED_BYTES} bytes");
+        }
+        if name != want {
+            continue;
+        }
+        if found.is_some() {
+            bail!("artifact has duplicate {want}");
+        }
+        if entry.size() > MAX_JSON_BYTES as u64 {
+            bail!("{want} is unexpectedly large");
+        }
+        let mut buf = Vec::new();
+        entry.read_to_end(&mut buf)?;
+        found = Some(buf);
+    }
+    found.ok_or_else(|| anyhow::anyhow!("artifact does not contain {want}"))
+}
+
 pub fn open(bytes: &[u8]) -> Result<ArtifactPayload> {
     if bytes.len() > MAX_ZIP_BYTES {
         bail!(
@@ -151,5 +207,71 @@ mod tests {
                 .to_string()
                 .contains(SCHEMA_VERSION_FILE)
         );
+    }
+}
+
+#[cfg(test)]
+mod open_named_tests {
+    use super::*;
+    use std::io::Write;
+    use zip::write::SimpleFileOptions;
+
+    fn zip_of(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut buf = Cursor::new(Vec::new());
+        {
+            let mut w = zip::ZipWriter::new(&mut buf);
+            for (name, body) in entries {
+                w.start_file(*name, SimpleFileOptions::default()).unwrap();
+                w.write_all(body).unwrap();
+            }
+            w.finish().unwrap();
+        }
+        buf.into_inner()
+    }
+
+    #[test]
+    fn returns_the_named_file_and_nothing_else() {
+        let zip = zip_of(&[
+            ("ci-metrics-job-aliases.json", br#"{"canonical":["e2e"]}"#),
+            ("unrelated.txt", b"ignored"),
+        ]);
+        let got = open_named(&zip, "ci-metrics-job-aliases.json").unwrap();
+        assert_eq!(got, br#"{"canonical":["e2e"]}"#);
+    }
+
+    #[test]
+    fn says_so_when_the_file_is_not_there() {
+        let zip = zip_of(&[("something-else.json", b"{}")]);
+        let err = open_named(&zip, "ci-metrics-job-aliases.json").unwrap_err();
+        assert!(
+            err.to_string().contains("does not contain"),
+            "unhelpful error: {err}"
+        );
+    }
+
+    /// The same guard the metrics path has. An artifact is attacker-adjacent:
+    /// anything that can run CI can upload one.
+    #[test]
+    fn refuses_a_nested_or_traversing_entry() {
+        let nested = zip_of(&[("a/ci-metrics-job-aliases.json", b"{}")]);
+        assert!(open_named(&nested, "ci-metrics-job-aliases.json").is_err());
+        let traversal = zip_of(&[("../ci-metrics-job-aliases.json", b"{}")]);
+        assert!(open_named(&traversal, "ci-metrics-job-aliases.json").is_err());
+    }
+
+    #[test]
+    fn refuses_more_entries_than_the_bound_allows() {
+        let names: Vec<String> = (0..MAX_ENTRIES + 1).map(|i| format!("f{i}")).collect();
+        let entries: Vec<(&str, &[u8])> =
+            names.iter().map(|n| (n.as_str(), b"x" as &[u8])).collect();
+        let err = open_named(&zip_of(&entries), "f0").unwrap_err();
+        assert!(err.to_string().contains("entries"), "unhelpful: {err}");
+    }
+
+    #[test]
+    fn refuses_a_zip_over_the_byte_bound() {
+        let big = vec![0u8; MAX_ZIP_BYTES + 1];
+        let err = open_named(&big, "anything").unwrap_err();
+        assert!(err.to_string().contains("over the"), "unhelpful: {err}");
     }
 }

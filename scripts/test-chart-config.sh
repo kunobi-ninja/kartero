@@ -51,7 +51,7 @@ sources:
       guardStep: Reject filtered CI as a complete validation
       filterJob: changes
       docsJob: Docs checks
-      jobNamesPath: scripts/ci/ci-metrics-job-aliases.json
+      jobNamesArtifact: ci-job-names
 archive:
   enabled: true
 allowlist:
@@ -105,8 +105,8 @@ done
 # A field the schema permits but no template renders is accepted and silently
 # ignored, which is how the actions block itself shipped once doing nothing.
 # Assert against the rendered config rather than the values.
-if ! grep -q 'job_names_path: "scripts/ci/ci-metrics-job-aliases.json"' "$work/kartero.yaml"; then
-  echo "jobNamesPath did not reach the pod's config" >&2
+if ! grep -q 'job_names_artifact: "ci-job-names"' "$work/kartero.yaml"; then
+  echo "jobNamesArtifact did not reach the pod's config" >&2
   exit 1
 fi
 

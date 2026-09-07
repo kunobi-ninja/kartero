@@ -16,6 +16,10 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 
+/// The file the artifact is expected to contain, matching the name the
+/// repository commits it under.
+pub const FILE: &str = "ci-metrics-job-aliases.json";
+
 #[derive(Debug, Deserialize)]
 struct FileJobNames {
     /// Declared names. Retired names stay in here while the listing window
