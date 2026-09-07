@@ -19,6 +19,7 @@ pub struct Metrics {
     collect_errors: IntCounterVec,
     source_up: IntGaugeVec,
     source_listing_failures: IntCounterVec,
+    anomalies: IntCounterVec,
     source_token_expires: IntGaugeVec,
     archive_artifacts: IntCounterVec,
     archive_passes: IntCounterVec,
@@ -123,6 +124,18 @@ impl Metrics {
             &["source", "kind"],
         )
         .expect("source listing failures counter");
+        // Every rule that drops a derived point counts it here instead of
+        // discarding it silently. kind=unknown_job_name rising is a job that
+        // was renamed without the collector's configuration following, which
+        // otherwise shows up only as a panel quietly going flat.
+        let anomalies = IntCounterVec::new(
+            opts!(
+                "kartero_anomalies_total",
+                "Derivations the collector had to give up on, per source and kind."
+            ),
+            &["source", "kind"],
+        )
+        .expect("anomalies counter");
         // An absolute instant rather than a countdown: a "seconds remaining"
         // gauge is wrong the moment scraping stops, and right only by
         // accident. Alert with `- time()`.
@@ -143,6 +156,9 @@ impl Metrics {
         registry
             .register(Box::new(source_listing_failures.clone()))
             .expect("register source listing failures");
+        registry
+            .register(Box::new(anomalies.clone()))
+            .expect("register anomalies");
         registry
             .register(Box::new(artifacts.clone()))
             .expect("register artifacts");
@@ -257,6 +273,7 @@ impl Metrics {
             collect_errors,
             source_up,
             source_listing_failures,
+            anomalies,
             source_token_expires,
             archive_artifacts,
             archive_passes,
@@ -284,6 +301,10 @@ impl Metrics {
         self.source_listing_failures
             .with_label_values(&[source, kind])
             .inc();
+    }
+
+    pub fn inc_anomaly(&self, source: &str, kind: &str) {
+        self.anomalies.with_label_values(&[source, kind]).inc();
     }
 
     pub fn inc_artifact(&self, outcome: &str) {

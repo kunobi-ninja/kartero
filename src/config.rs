@@ -71,6 +71,11 @@ pub struct ActionsConfig {
     /// nightly flake detector where green means it measured and red means the
     /// detector broke. Excluded whole, not per job.
     pub excluded_workflows: Vec<String>,
+    /// Path, in the source repository, of the file that declares its job names
+    /// and aliases. Set it and `canonical_jobs`/`job_aliases` are read from
+    /// there instead of from here, so a rename is covered by the pull request
+    /// that makes it rather than by a later change to this deployment.
+    pub job_names_path: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -146,6 +151,8 @@ struct FileActions {
     job_aliases: BTreeMap<String, String>,
     #[serde(default)]
     excluded_workflows: Vec<String>,
+    #[serde(default)]
+    job_names_path: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -320,6 +327,7 @@ fn resolve_sources(
                 canonical_jobs: actions.canonical_jobs,
                 job_aliases: actions.job_aliases,
                 excluded_workflows: actions.excluded_workflows,
+                job_names_path: actions.job_names_path,
             }),
         };
         // Two entries for one repository would list the same runs twice. The

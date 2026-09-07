@@ -195,6 +195,28 @@ async fn derive_actions(
     snapshot: &mut CollectSnapshot,
 ) -> Result<()> {
     let metrics = Metrics::global();
+
+    // Job names come from the repository that declares them when it says
+    // where. Failing here stops the derivation for this source rather than
+    // falling back to whatever is configured locally: an empty or stale list
+    // sends every job to `other`, and these are delta points, so a pass that
+    // emits them cannot be taken back.
+    let actions = &match resolve_job_names(source, actions, github).await {
+        Ok(resolved) => resolved,
+        Err(err) => {
+            warn!(
+                source = %source.slug(),
+                error = %err,
+                "job names unreadable; deriving nothing for this source"
+            );
+            metrics.inc_source_listing_failure(&source.slug(), "job_names");
+            snapshot.sources_misconfigured += 1;
+            snapshot.inc_anomaly(&source.slug(), "job_names_unreadable");
+            metrics.inc_anomaly(&source.slug(), "job_names_unreadable");
+            return Ok(());
+        }
+    };
+
     for run in runs {
         // Attempt 1 has no predecessor, so a flake cannot be read from it; the
         // pair is fetched only where there is a transition to classify.
@@ -218,6 +240,19 @@ async fn derive_actions(
                     actions,
                 );
                 derived.points.extend(flake.points);
+                for anomaly in flake.anomalies {
+                    derived.anomalies.push(anomaly);
+                }
+            }
+
+            // Reported rather than discarded. Every one of these means a point
+            // that could have existed does not, and the commonest of them --
+            // a job renamed without `canonicalJobs` following -- shows up
+            // nowhere else: the series simply stops, which looks the same as a
+            // repository nobody pushed to this week.
+            for anomaly in &derived.anomalies {
+                metrics.inc_anomaly(&source.slug(), anomaly.as_str());
+                snapshot.inc_anomaly(&source.slug(), anomaly.as_str());
             }
 
             if !derived.points.is_empty() {
@@ -427,6 +462,37 @@ async fn ingest_one(
     record_artifact(metrics, snapshot, outcome);
     warn!(%status, artifact = %artifact.name, "OTLP backend rejected payload");
     Ok(())
+}
+
+/// The job names this source's derivation should use.
+///
+/// When `job_names_path` is set the repository owns them and this returns a
+/// copy of the deployment config with its `canonical_jobs` and `job_aliases`
+/// replaced. When it is not, the deployment's own lists are used unchanged, so
+/// a source that has no such file in it keeps working.
+///
+/// Errors rather than falling back. A fallback would be the quiet failure this
+/// whole mechanism exists to remove: the names would silently be the wrong
+/// ones, every job would collapse to `other`, and the only symptom would be
+/// every per-job series stopping at once.
+async fn resolve_job_names(
+    source: &SourceConfig,
+    actions: &crate::config::ActionsConfig,
+    github: &GitHub,
+) -> Result<crate::config::ActionsConfig> {
+    let Some(path) = actions.job_names_path.as_deref() else {
+        return Ok(actions.clone());
+    };
+    let raw = github
+        .fetch_file(path)
+        .await
+        .with_context(|| format!("reading {path} from {}", source.slug()))?;
+    let names = crate::actions::names::parse(&raw)
+        .with_context(|| format!("{path} in {}", source.slug()))?;
+    let mut resolved = actions.clone();
+    resolved.canonical_jobs = names.canonical;
+    resolved.job_aliases = names.aliases;
+    Ok(resolved)
 }
 
 #[cfg(test)]
