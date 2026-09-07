@@ -73,6 +73,13 @@ data:
             {{- range .excludedWorkflows }}
             - {{ . | quote }}
             {{- end }}
+          {{- with .jobNamesPath }}
+          # Set, and the two lists above are read from this file in the source
+          # repository instead of from here, so a job rename is covered by the
+          # pull request that makes it rather than by a later change to this
+          # deployment.
+          job_names_path: {{ . | quote }}
+          {{- end }}
         {{- end }}
     {{- end }}
     {{- if .Values.archive.enabled }}

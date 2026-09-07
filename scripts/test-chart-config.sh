@@ -39,6 +39,19 @@ sources:
         "e2e / test": e2e
       canonicalJobs: [changes, CI Gate, e2e]
       excludedWorkflows: [.github/workflows/e2e-flake-nightly.yaml]
+  - owner: kunobi-ninja
+    repo: kobe
+    workflows: [ci.yaml]
+    trustedBranch: main
+    existingSecret: kartero-github-kobe
+    existingSecretKey: token
+    actions:
+      gateJob: CI Gate
+      guardJob: E2E-only filter detected
+      guardStep: Reject filtered CI as a complete validation
+      filterJob: changes
+      docsJob: Docs checks
+      jobNamesPath: scripts/ci/ci-metrics-job-aliases.json
 archive:
   enabled: true
 allowlist:
@@ -70,9 +83,10 @@ PY
 # The rendered config points at Secret mounts that only exist in a pod. Swap
 # the root for a directory holding stand-in tokens: the shape under test is the
 # wiring, not the secret material.
-mkdir -p "$work/tokens/0" "$work/tokens/1"
+mkdir -p "$work/tokens/0" "$work/tokens/1" "$work/tokens/2"
 echo "token-a" >"$work/tokens/0/token"
 echo "token-b" >"$work/tokens/1/token"
+echo "token-c" >"$work/tokens/2/token"
 sed -i.bak "s#/etc/kartero/tokens#$work/tokens#g" "$work/kartero.yaml"
 
 output="$(cd "$root" && KARTERO_CONFIG="$work/kartero.yaml" cargo run --quiet -- config-check)"
@@ -87,6 +101,14 @@ for expected in \
     exit 1
   fi
 done
+
+# A field the schema permits but no template renders is accepted and silently
+# ignored, which is how the actions block itself shipped once doing nothing.
+# Assert against the rendered config rather than the values.
+if ! grep -q 'job_names_path: "scripts/ci/ci-metrics-job-aliases.json"' "$work/kartero.yaml"; then
+  echo "jobNamesPath did not reach the pod's config" >&2
+  exit 1
+fi
 
 # The allowlist a deployment supplies has to reach the pod, or owning it is
 # a setting that does nothing.
