@@ -41,6 +41,7 @@ pub struct Allowlist {
     pub attributes: BTreeSet<String>,
     pub attribute_patterns: Vec<Pattern>,
     pub projects: BTreeSet<String>,
+    pub project_patterns: Vec<Pattern>,
     /// Attributes whose values are checked as well as their keys. A key absent
     /// here is admitted with whatever value the producer sent.
     pub attribute_values: BTreeMap<String, BTreeSet<String>>,
@@ -56,7 +57,10 @@ struct FileAllowlist {
     attributes: Vec<String>,
     #[serde(default)]
     attribute_patterns: Vec<String>,
+    #[serde(default)]
     projects: Vec<String>,
+    #[serde(default)]
+    project_patterns: Vec<String>,
     #[serde(default)]
     attribute_values: BTreeMap<String, Vec<String>>,
 }
@@ -98,6 +102,7 @@ impl Allowlist {
             attributes,
             attribute_patterns,
             projects: file.projects.into_iter().collect(),
+            project_patterns: compile_all(file.project_patterns)?,
             attribute_values,
         };
         if list.metrics.is_empty() && list.metric_patterns.is_empty() {
@@ -130,8 +135,19 @@ impl Allowlist {
                 .any(|pattern| pattern.matches(key))
     }
 
+    /// Whether a bench may report under this project name.
+    ///
+    /// Enumerating them drifted: kache grew ten bench variants the list never
+    /// learned about, and every point from them was dropped for carrying an
+    /// unlisted project — the whole artifact rejected as "allowlist dropped
+    /// every metric". A family is the honest unit here, because a project name
+    /// is chosen by whoever adds a bench, not derived from a run.
     pub fn allows_project(&self, name: &str) -> bool {
         self.projects.contains(name)
+            || self
+                .project_patterns
+                .iter()
+                .any(|pattern| pattern.matches(name))
     }
 
     /// Whether this key may carry this value.
@@ -165,6 +181,33 @@ projects: [bench-firefox]
         assert!(list.allows_metric("kache.bench.speedup"));
         assert!(!list.allows_metric("kache.bench.surprise"));
         assert!(!list.allows_project("typo-firefox"));
+    }
+
+    /// The drift this exists to stop: ten bench variants kache added that the
+    /// enumeration never learned, each rejecting a whole artifact.
+    #[test]
+    fn a_project_family_admits_variants_the_list_never_learned() {
+        let list = Allowlist::parse(
+            r#"
+metrics: [kache.bench.speedup]
+attributes: [kache.bench.project]
+projects: []
+project_patterns: ['bench-.+']
+"#,
+        )
+        .unwrap();
+        for project in [
+            "bench-firefox",
+            "bench-substrate-mbx",
+            "bench-surrealdb-mbx",
+            "bench-hk-pull",
+            "bench-eza",
+        ] {
+            assert!(list.allows_project(project), "{project} should be admitted");
+        }
+        // Still a family, not everything.
+        assert!(!list.allows_project("something-else"));
+        assert!(!list.allows_project("bench-"));
     }
 
     #[test]

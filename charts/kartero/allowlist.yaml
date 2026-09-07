@@ -85,17 +85,16 @@ attribute_values:
     - after_cancelled
     - other
 
-# Bench runs must name a project, and it must be one of these. Unlike the
-# vocabularies above this one is required rather than merely checked: a
-# `kache.bench.*` point carrying no project, or an unlisted one, is dropped.
-projects:
-  - bench-firefox
-  - bench-firefox-windows
-  - bench-firefox-sccache
-  - bench-firefox-pull
-  - bench-firefox-pull-windows
-  - bench-substrate
-  - bench-surrealdb
-  - bench-lance
-  - bench-opendal
-  - bench-llvm
+# Bench runs must name a project, and it must match. Unlike the vocabularies
+# above this one is required rather than merely checked: a `kache.bench.*`
+# point carrying no project, or one that matches nothing, is dropped.
+#
+# A family rather than a list. Enumerating them drifted — kache grew ten bench
+# variants the list never learned, and each one rejected a whole artifact with
+# "allowlist dropped every metric". A project name is chosen by whoever adds a
+# bench rather than derived from a run, so the cardinality is bounded by how
+# many benches exist.
+project_patterns:
+  - 'bench-.+'
+
+projects: []
