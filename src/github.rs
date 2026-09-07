@@ -643,3 +643,33 @@ mod tests {
         assert!(!artifact_name_matches("telemetry-otlp-v1-firefox", "bench"));
     }
 }
+
+#[cfg(test)]
+mod permanent_kind_through_context {
+    use super::*;
+    use anyhow::Context;
+
+    /// `collect.rs` classifies a job-names failure by downcasting an error it
+    /// has already wrapped in context. If that downcast stopped seeing through
+    /// the wrapper the log would say `job_names` for a 403, a 404 and a
+    /// malformed file alike -- three different fixes, one indistinguishable
+    /// message. This is the assumption that logging depends on.
+    #[test]
+    fn survives_the_context_collect_adds() {
+        let raw: anyhow::Error = SourceFailure::Forbidden {
+            owner: "Zondax".into(),
+            repo: "kunobi-frontend".into(),
+        }
+        .into();
+        let wrapped = raw.context("reading scripts/ci/ci-metrics-job-aliases.json");
+        assert_eq!(permanent_kind(&wrapped), Some("forbidden"));
+    }
+
+    #[test]
+    fn a_parse_failure_is_not_classified_as_a_source_failure() {
+        let err = serde_json::from_str::<serde_json::Value>("{oops")
+            .context("parsing")
+            .unwrap_err();
+        assert_eq!(permanent_kind(&err), None);
+    }
+}

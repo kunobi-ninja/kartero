@@ -204,12 +204,19 @@ async fn derive_actions(
     let actions = &match resolve_job_names(source, actions, github).await {
         Ok(resolved) => resolved,
         Err(err) => {
-            warn!(
+            // `{:#}` rather than Display: this stops the derivation for a whole
+            // source, and the outermost context alone says which file could not
+            // be read without ever saying why. A 404, a 403 for a token missing
+            // repository contents, and a malformed file all need different
+            // fixes and looked identical in the log.
+            let kind = github::permanent_kind(&err).unwrap_or("job_names");
+            error!(
                 source = %source.slug(),
-                error = %err,
+                kind,
+                error = format!("{err:#}"),
                 "job names unreadable; deriving nothing for this source"
             );
-            metrics.inc_source_listing_failure(&source.slug(), "job_names");
+            metrics.inc_source_listing_failure(&source.slug(), kind);
             snapshot.sources_misconfigured += 1;
             snapshot.inc_anomaly(&source.slug(), "job_names_unreadable");
             metrics.inc_anomaly(&source.slug(), "job_names_unreadable");
