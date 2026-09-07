@@ -161,7 +161,7 @@ async fn collect_source(
     }
     if let Some(actions) = source.actions.as_ref()
         && let Err(err) = derive_actions(
-            config, source, actions, &runs, ledger, &github, client, snapshot,
+            config, source, actions, allowlist, &runs, ledger, &github, client, snapshot,
         )
         .await
     {
@@ -187,6 +187,7 @@ async fn derive_actions(
     config: &Config,
     source: &SourceConfig,
     actions: &crate::config::ActionsConfig,
+    allowlist: &Allowlist,
     runs: &[WorkflowRun],
     ledger: &Ledger,
     github: &GitHub,
@@ -222,9 +223,35 @@ async fn derive_actions(
             if !derived.points.is_empty() {
                 let observed = vec![run.observed_at; derived.points.len()];
                 let body = crate::actions::emit::to_otlp(&derived.points, &observed);
-                deliver_derived(config, client, &body).await?;
-                snapshot.metrics_kept += derived.points.len() as u64;
-                metrics.add_kept(derived.points.len() as u64);
+                // Through the same filter as a producer's payload. Deriving a
+                // metric here rather than importing it does not exempt it from
+                // review: an undeclared name is still an undeclared name, and
+                // the trusted-run envelope is what tells a derived series from
+                // whatever else claims the same metric.
+                let envelope = Envelope {
+                    pipeline_name: run.workflow_name.clone(),
+                    repository_url: github.repository_url(),
+                };
+                let raw = serde_json::to_vec(&body)?;
+                match otlp::prepare(&raw, allowlist, &envelope) {
+                    Ok((filtered, stats)) => {
+                        deliver_derived(config, client, &filtered).await?;
+                        metrics.add_dropped("metric", stats.metrics_dropped);
+                        metrics.add_dropped("point", stats.points_dropped);
+                        metrics.add_kept(stats.metrics_kept);
+                        snapshot.metrics_dropped += stats.metrics_dropped;
+                        snapshot.points_dropped += stats.points_dropped;
+                        snapshot.metrics_kept += stats.metrics_kept;
+                    }
+                    Err(err) => {
+                        warn!(
+                            source = %source.slug(),
+                            run_id = run.run_id,
+                            error = %err,
+                            "derived payload rejected by the allowlist"
+                        );
+                    }
+                }
             }
             ledger.seal_attempt(run.repo_id, run.run_id, attempt)?;
             snapshot.attempts_derived += 1;
@@ -233,16 +260,12 @@ async fn derive_actions(
     Ok(())
 }
 
-async fn deliver_derived(
-    config: &Config,
-    client: &reqwest::Client,
-    body: &serde_json::Value,
-) -> Result<()> {
+async fn deliver_derived(config: &Config, client: &reqwest::Client, body: &[u8]) -> Result<()> {
     let url = format!("{}/v1/metrics", config.otlp_endpoint.trim_end_matches('/'));
     let response = client
         .post(url)
         .header(reqwest::header::CONTENT_TYPE, "application/json")
-        .body(serde_json::to_vec(body)?)
+        .body(body.to_vec())
         .send()
         .await
         .context("posting derived CI metrics")?;
