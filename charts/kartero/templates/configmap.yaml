@@ -73,12 +73,16 @@ data:
             {{- range .excludedWorkflows }}
             - {{ . | quote }}
             {{- end }}
-          {{- with .jobNamesPath }}
-          # Set, and the two lists above are read from this file in the source
-          # repository instead of from here, so a job rename is covered by the
-          # pull request that makes it rather than by a later change to this
-          # deployment.
-          job_names_path: {{ . | quote }}
+          {{- with .jobNamesArtifact }}
+          # Set, and the two lists above come from this artifact, uploaded by
+          # the source repository's own trusted runs, instead of from here. A
+          # job rename is then covered by the pull request that makes it.
+          #
+          # An artifact rather than a path in the repository: reading a file
+          # out of a private repository needs `contents: read`, the whole
+          # source tree, where artifacts need only the `actions: read` this
+          # collector already has.
+          job_names_artifact: {{ . | quote }}
           {{- end }}
         {{- end }}
     {{- end }}

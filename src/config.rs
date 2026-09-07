@@ -71,11 +71,17 @@ pub struct ActionsConfig {
     /// nightly flake detector where green means it measured and red means the
     /// detector broke. Excluded whole, not per job.
     pub excluded_workflows: Vec<String>,
-    /// Path, in the source repository, of the file that declares its job names
-    /// and aliases. Set it and `canonical_jobs`/`job_aliases` are read from
-    /// there instead of from here, so a rename is covered by the pull request
-    /// that makes it rather than by a later change to this deployment.
-    pub job_names_path: Option<String>,
+    /// Name of the artifact a trusted run uploads carrying the file that
+    /// declares this repository's job names and aliases. Set it and
+    /// `canonical_jobs`/`job_aliases` come from there instead of from here, so
+    /// a rename is covered by the pull request that makes it rather than by a
+    /// later change to this deployment.
+    ///
+    /// An artifact rather than the contents API: reading a file out of a
+    /// private repository needs `contents: read`, which is the whole source
+    /// tree, and this collector otherwise needs only `actions: read`. A short
+    /// list of job names does not justify handing it the code.
+    pub job_names_artifact: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -152,7 +158,7 @@ struct FileActions {
     #[serde(default)]
     excluded_workflows: Vec<String>,
     #[serde(default)]
-    job_names_path: Option<String>,
+    job_names_artifact: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -327,7 +333,7 @@ fn resolve_sources(
                 canonical_jobs: actions.canonical_jobs,
                 job_aliases: actions.job_aliases,
                 excluded_workflows: actions.excluded_workflows,
-                job_names_path: actions.job_names_path,
+                job_names_artifact: actions.job_names_artifact,
             }),
         };
         // Two entries for one repository would list the same runs twice. The

@@ -62,7 +62,7 @@
               "branchClasses": { "type": "object", "additionalProperties": { "type": "string", "minLength": 1 } },
               "jobAliases": { "type": "object", "additionalProperties": { "type": "string", "minLength": 1 } },
               "canonicalJobs": { "type": "array", "items": { "type": "string", "minLength": 1 } },
-              "jobNamesPath": { "type": "string", "minLength": 1 },
+              "jobNamesArtifact": { "type": "string", "minLength": 1 },
               "excludedWorkflows": { "type": "array", "items": { "type": "string", "minLength": 1 } }
             },
             "required": ["gateJob", "guardJob", "guardStep", "filterJob", "docsJob"]

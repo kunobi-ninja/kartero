@@ -71,7 +71,7 @@ mod tests {
             canonical_jobs: Vec::new(),
             job_aliases: BTreeMap::new(),
             excluded_workflows: Vec::new(),
-            job_names_path: None,
+            job_names_artifact: None,
         }
     }
 

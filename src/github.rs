@@ -403,30 +403,6 @@ impl GitHub {
             self.config.owner, self.config.repo
         )
     }
-
-    /// One file from the source repository, at its trusted branch.
-    ///
-    /// Read at the trusted branch rather than at each run's own commit: this
-    /// describes how to name jobs, not what a particular attempt did, and
-    /// resolving it per commit would let a pull request rename a series for
-    /// everyone by editing one file.
-    pub async fn fetch_file(&self, path: &str) -> Result<String> {
-        let url = format!(
-            "https://api.github.com/repos/{}/{}/contents/{path}?ref={}",
-            self.config.owner, self.config.repo, self.config.trusted_branch
-        );
-        let response = self
-            .client
-            .get(url)
-            .header("Accept", "application/vnd.github.raw")
-            .send()
-            .await?;
-        self.record_token_expiry(response.headers());
-        if let Some(failure) = self.classify(response.status(), response.headers(), path) {
-            return Err(failure.into());
-        }
-        Ok(response.error_for_status()?.text().await?)
-    }
 }
 
 /// `YYYY-MM-DD`, the shape GitHub's `created` filter takes.

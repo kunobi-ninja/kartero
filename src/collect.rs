@@ -201,7 +201,7 @@ async fn derive_actions(
     // falling back to whatever is configured locally: an empty or stale list
     // sends every job to `other`, and these are delta points, so a pass that
     // emits them cannot be taken back.
-    let actions = &match resolve_job_names(source, actions, github).await {
+    let actions = &match resolve_job_names(source, actions, runs, github).await {
         Ok(resolved) => resolved,
         Err(err) => {
             // `{:#}` rather than Display: this stops the derivation for a whole
@@ -473,10 +473,20 @@ async fn ingest_one(
 
 /// The job names this source's derivation should use.
 ///
-/// When `job_names_path` is set the repository owns them and this returns a
-/// copy of the deployment config with its `canonical_jobs` and `job_aliases`
-/// replaced. When it is not, the deployment's own lists are used unchanged, so
-/// a source that has no such file in it keeps working.
+/// When `job_names_artifact` is set the repository owns them and this returns
+/// a copy of the deployment config with `canonical_jobs` and `job_aliases`
+/// replaced by what the newest trusted run uploaded. When it is not, the
+/// deployment's own lists are used unchanged, so a source without the artifact
+/// keeps working.
+///
+/// Read from an artifact rather than the contents API. Reading a file out of a
+/// private repository needs `contents: read`, which grants the whole source
+/// tree; artifacts need `actions: read`, which this collector already has for
+/// everything else it does. A short list of job names does not justify handing
+/// a telemetry collector the code.
+///
+/// Only trusted runs are considered, so the names come from the trusted branch
+/// and a pull request cannot rename a series for everyone by editing one file.
 ///
 /// Errors rather than falling back. A fallback would be the quiet failure this
 /// whole mechanism exists to remove: the names would silently be the wrong
@@ -485,21 +495,57 @@ async fn ingest_one(
 async fn resolve_job_names(
     source: &SourceConfig,
     actions: &crate::config::ActionsConfig,
+    runs: &[WorkflowRun],
     github: &GitHub,
 ) -> Result<crate::config::ActionsConfig> {
-    let Some(path) = actions.job_names_path.as_deref() else {
+    let Some(want) = actions.job_names_artifact.as_deref() else {
         return Ok(actions.clone());
     };
-    let raw = github
-        .fetch_file(path)
-        .await
-        .with_context(|| format!("reading {path} from {}", source.slug()))?;
-    let names = crate::actions::names::parse(&raw)
-        .with_context(|| format!("{path} in {}", source.slug()))?;
-    let mut resolved = actions.clone();
-    resolved.canonical_jobs = names.canonical;
-    resolved.job_aliases = names.aliases;
-    Ok(resolved)
+
+    // Newest first: the most recent trusted run describes the job names as
+    // they are now, and older runs are only reached if it did not upload them.
+    let mut trusted: Vec<&WorkflowRun> = runs.iter().filter(|run| github.trusted(run)).collect();
+    trusted.sort_by_key(|run| std::cmp::Reverse(run.run_id));
+    if trusted.is_empty() {
+        anyhow::bail!("no trusted run in this window carries {want}");
+    }
+
+    let mut last_err = None;
+    for run in trusted {
+        let artifacts = match github.list_artifacts(run.run_id).await {
+            Ok(list) => list,
+            Err(err) => {
+                last_err = Some(err);
+                continue;
+            }
+        };
+        let Some(found) = artifacts
+            .iter()
+            .find(|artifact| artifact.name == want && !artifact.expired)
+        else {
+            continue;
+        };
+        let zip = github
+            .download_zip_limited(found.id, MAX_ZIP_BYTES)
+            .await
+            .with_context(|| format!("downloading {want} from run {}", run.run_id))?;
+        let raw = crate::artifact::open_named(&zip, crate::actions::names::FILE)
+            .with_context(|| format!("{want} from run {}", run.run_id))?;
+        let names = crate::actions::names::parse(&String::from_utf8_lossy(&raw))
+            .with_context(|| format!("{want} from run {}", run.run_id))?;
+        let mut resolved = actions.clone();
+        resolved.canonical_jobs = names.canonical;
+        resolved.job_aliases = names.aliases;
+        return Ok(resolved);
+    }
+
+    match last_err {
+        Some(err) => Err(err.context(format!("looking for {want} in {}", source.slug()))),
+        None => anyhow::bail!(
+            "no trusted run in this window uploaded an unexpired {want}; the workflow that \
+             publishes it may have stopped running or the artifacts may have expired"
+        ),
+    }
 }
 
 #[cfg(test)]
