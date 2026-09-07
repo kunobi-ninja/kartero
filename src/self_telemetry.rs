@@ -524,7 +524,12 @@ mod tests {
             .find(|m| m["name"] == "kartero.collect.anomalies")
             .expect("anomalies gauge")
             .clone();
-        assert!(anomalies["gauge"]["dataPoints"].as_array().unwrap().is_empty());
+        assert!(
+            anomalies["gauge"]["dataPoints"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
