@@ -352,6 +352,9 @@ async fn ingest_one(
     run: &WorkflowRun,
     artifact: &ArtifactRef,
 ) -> Result<()> {
+    // Cheap: a hash of a few dozen short strings, and it has to match what a
+    // later pass computes from the allowlist then in force.
+    let allowlist_fingerprint = &allowlist.fingerprint();
     let key_without_version = |schema_version: u32| DeliveryKey {
         repo_id: run.repo_id,
         run_id: run.run_id,
@@ -377,7 +380,7 @@ async fn ingest_one(
         return Ok(());
     }
 
-    if ledger.is_terminal(&key_without_version(1))? {
+    if ledger.is_terminal(&key_without_version(1), allowlist_fingerprint)? {
         record_artifact(metrics, snapshot, "skipped");
         return Ok(());
     }
@@ -393,7 +396,7 @@ async fn ingest_one(
         }
     };
     let key = key_without_version(payload.schema_version);
-    if ledger.is_terminal(&key)? {
+    if ledger.is_terminal(&key, allowlist_fingerprint)? {
         record_artifact(metrics, snapshot, "skipped");
         return Ok(());
     }
@@ -415,8 +418,18 @@ async fn ingest_one(
     let (body, stats) = match otlp::prepare(&payload.metrics_json, allowlist, &envelope) {
         Ok(prepared) => prepared,
         Err(err) => {
-            warn!(artifact = %artifact.name, error = %err, "payload rejected");
-            ledger.record(&key, DeliveryStatus::Skipped)?;
+            // Recorded against the allowlist that emptied it, not sealed for
+            // good. Every other refusal here is a property of the artifact and
+            // will not change -- an unsupported schema stays unsupported. This one
+            // is a property of the allowlist, and widening the allowlist is
+            // exactly the event that makes it wrong.
+            warn!(
+                artifact = %artifact.name,
+                allowlist = %allowlist_fingerprint,
+                error = %err,
+                "payload emptied by the allowlist; will be re-read if the allowlist changes"
+            );
+            ledger.record_against(&key, DeliveryStatus::Filtered, Some(allowlist_fingerprint))?;
             record_artifact(metrics, snapshot, "skipped");
             return Ok(());
         }

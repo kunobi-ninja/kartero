@@ -70,6 +70,48 @@ fn compile_all(sources: Vec<String>) -> Result<Vec<Pattern>> {
 }
 
 impl Allowlist {
+    /// A stable fingerprint of what this allowlist admits.
+    ///
+    /// Recorded beside an artifact the allowlist emptied, so the decision is
+    /// sealed against the rules that made it rather than forever. Widen the
+    /// allowlist and the fingerprint changes, which un-seals exactly the
+    /// artifacts that were refused for a reason that no longer holds.
+    ///
+    /// Built from the compiled sets rather than the file's bytes: a comment,
+    /// a reordering or a change in indentation does not alter what is
+    /// admitted, and re-reading every refused artifact because someone fixed a
+    /// typo in a comment is a cost with nothing on the other side.
+    pub fn fingerprint(&self) -> String {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut hasher = DefaultHasher::new();
+        for name in &self.metrics {
+            name.hash(&mut hasher);
+        }
+        for pattern in &self.metric_patterns {
+            pattern.source.hash(&mut hasher);
+        }
+        for name in &self.attributes {
+            name.hash(&mut hasher);
+        }
+        for pattern in &self.attribute_patterns {
+            pattern.source.hash(&mut hasher);
+        }
+        for name in &self.projects {
+            name.hash(&mut hasher);
+        }
+        for pattern in &self.project_patterns {
+            pattern.source.hash(&mut hasher);
+        }
+        for (key, values) in &self.attribute_values {
+            key.hash(&mut hasher);
+            for value in values {
+                value.hash(&mut hasher);
+            }
+        }
+        format!("{:016x}", hasher.finish())
+    }
+
     pub fn load(path: &Path) -> Result<Self> {
         let raw = std::fs::read_to_string(path)
             .with_context(|| format!("reading allowlist {}", path.display()))?;
