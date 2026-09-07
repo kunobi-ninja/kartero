@@ -4,7 +4,7 @@ Generate a Kartero artifact from an Istanbul summary, LLVM coverage JSON, or
 LCOV report:
 
 ```bash
-npx --yes @kunobi/kartero@0.4.3 coverage \
+npx --yes @kunobi/kartero@0.4.4 coverage \
   --input coverage/coverage-summary.json \
   --output telemetry
 ```
@@ -19,7 +19,7 @@ Create a minimal gauge artifact before a risky CI step so a failure still
 produces telemetry:
 
 ```bash
-npx --yes @kunobi/kartero@0.4.3 gauge \
+npx --yes @kunobi/kartero@0.4.4 gauge \
   --name kache.bench.verdict.ok \
   --value 0 \
   --attribute kache.bench.project=bench-firefox \
