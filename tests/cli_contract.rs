@@ -205,6 +205,40 @@ fn patterns_do_not_admit_a_neighbouring_namespace() {
     assert!(!allowlist.allows_attribute("actor_login"));
 }
 
+/// Every bench project kache actually runs, read from its workflow at the
+/// time this was written. Ten of these were missing from the enumeration and
+/// each one rejected a whole artifact.
+#[test]
+fn every_bench_project_kache_runs_is_admitted() {
+    let allowlist = Allowlist::load(&fixture("allowlist.yaml")).unwrap();
+    for project in [
+        "bench-eza",
+        "bench-firefox",
+        "bench-firefox-pull",
+        "bench-firefox-pull-windows",
+        "bench-firefox-sccache",
+        "bench-firefox-windows",
+        "bench-hk",
+        "bench-hk-mbx",
+        "bench-hk-pull",
+        "bench-lance",
+        "bench-lance-mbx",
+        "bench-llvm",
+        "bench-mbx",
+        "bench-opendal",
+        "bench-opendal-mbx",
+        "bench-sccache",
+        "bench-substrate",
+        "bench-substrate-mbx",
+        "bench-surrealdb",
+        "bench-surrealdb-mbx",
+    ] {
+        assert!(allowlist.allows_project(project), "{project} is dropped");
+    }
+    // A family, not a free pass.
+    assert!(!allowlist.allows_project("not-a-bench"));
+}
+
 #[test]
 fn chart_allowlist_matches_root() {
     let root = std::fs::read_to_string(fixture("allowlist.yaml")).unwrap();

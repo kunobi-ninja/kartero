@@ -41,6 +41,13 @@ sources:
       excludedWorkflows: [.github/workflows/e2e-flake-nightly.yaml]
 archive:
   enabled: true
+allowlist:
+  content: |
+    metric_patterns:
+      - 'owned-by-the-deployment\..+'
+    metrics: []
+    attributes: []
+    projects: []
 YAML
 
 helm template kartero "$root/charts/kartero" -f "$work/values.yaml" >"$work/rendered.yaml"
@@ -80,5 +87,12 @@ for expected in \
     exit 1
   fi
 done
+
+# The allowlist a deployment supplies has to reach the pod, or owning it is
+# a setting that does nothing.
+if ! grep -q 'owned-by-the-deployment' "$work/rendered.yaml"; then
+  echo "the deployment's allowlist did not reach the ConfigMap" >&2
+  exit 1
+fi
 
 echo "chart config loads"

@@ -6,8 +6,14 @@ metadata:
   labels:
     {{- include "kartero.labels" . | nindent 4 }}
 data:
+  # The reviewed registry for this deployment, not for Kartero.
+  #
+  # What a deployment collects is its own business: the names in it belong to
+  # the repositories it watches, and adding a bench or a metric there should
+  # not need a release here. The file shipped with the chart is an example and
+  # the fallback, so an installation that sets nothing still starts.
   allowlist.yaml: |
-{{ .Files.Get "allowlist.yaml" | indent 4 }}
+{{ .Values.allowlist.content | default (.Files.Get "allowlist.yaml") | indent 4 }}
 {{- if .Values.sources }}
 ---
 # Several sources cannot be described by environment variables: each one has

@@ -87,6 +87,22 @@ ledger:
 
 allowlist:
   mountPath: /etc/kartero
+  # The reviewed metric and attribute registry for this deployment.
+  #
+  # Left empty the chart's own allowlist.yaml is used, which exists as a
+  # working example rather than as anybody's policy. Set it to own what this
+  # installation collects without waiting on a Kartero release — the names in
+  # it describe the repositories being watched, not the collector.
+  content: ""
+
+  # allowlist:
+  #   content: |
+  #     metric_patterns:
+  #       - 'ci\.(run|job)\..+'
+  #     attributes:
+  #       - branch_class
+  #     project_patterns: []
+  #     projects: []
 
 # Where the rendered collector config lands when `sources` is set. Unused
 # otherwise.
