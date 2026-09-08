@@ -137,6 +137,7 @@
         "enabled": { "type": "boolean" },
         "artifactPrefix": { "type": "string", "minLength": 1 },
         "maxBytes": { "type": "integer", "minimum": 1 },
+        "retentionDays": { "type": "integer", "minimum": 1 },
         "path": { "type": "string", "minLength": 1 },
         "persistence": {
           "type": "object",

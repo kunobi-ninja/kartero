@@ -61,10 +61,64 @@ async fn archive_inner(
             failed.push(source.slug());
         }
     }
+    // After archiving, not before: today's run is written first, so a volume
+    // that is nearly full still gets the newest artifact rather than losing it
+    // to a prune that had not run yet.
+    if let Err(err) = prune(archive, &ledger, snapshot) {
+        warn!(error = %err, "pruning the archive failed");
+        failed.push("retention".to_string());
+    }
     if !failed.is_empty() {
         bail!("archive failed for {}", failed.join(", "));
     }
     Ok(())
+}
+
+/// How many files one pass may delete.
+///
+/// A first pass after retention is configured, or after a long outage, could
+/// otherwise walk months of archives in one go and spend the pass on unlinks.
+/// Bounded, so it catches up over a few passes instead.
+const MAX_PRUNED_PER_PASS: usize = 500;
+
+/// Delete archived files past their horizon, keeping the ledger row.
+///
+/// The row outlives the file deliberately: it is what stops the next pass
+/// seeing an unarchived artifact, downloading it again, and handing it back to
+/// retention -- an archive that re-fetches everything it deletes, forever.
+fn prune(archive: &ArchiveConfig, ledger: &Ledger, snapshot: &mut ArchiveSnapshot) -> Result<()> {
+    let Some(days) = archive.retention_days else {
+        return Ok(());
+    };
+    let stale = ledger.archives_older_than(days, MAX_PRUNED_PER_PASS)?;
+    for row in stale {
+        let zip = archive.dir.join(&row.object_key);
+        // Missing is the expected case on a second run over the same row, and
+        // on a volume someone has cleared by hand. Neither is an error.
+        let freed = std::fs::metadata(&zip).map(|m| m.len()).unwrap_or(0);
+        remove_if_present(&zip)?;
+        remove_if_present(&sidecar_path(&zip))?;
+        ledger.record_archive(&row.key, &row.object_key, ArchiveStatus::Pruned)?;
+        snapshot.pruned += 1;
+        snapshot.pruned_bytes += freed;
+    }
+    if snapshot.pruned > 0 {
+        info!(
+            files = snapshot.pruned,
+            bytes = snapshot.pruned_bytes,
+            days,
+            "archive: pruned past the retention horizon"
+        );
+    }
+    Ok(())
+}
+
+fn remove_if_present(path: &Path) -> Result<()> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err).with_context(|| format!("removing {}", path.display())),
+    }
 }
 
 async fn archive_source(
@@ -564,5 +618,140 @@ mod sidecar_tests {
         // 1788782058 == 2026-09-07T11:54:18Z
         let (y, m, d) = civil_from_days(1_788_782_058_i64.div_euclid(86_400));
         assert_eq!((y, m, d), (2026, 9, 7));
+    }
+}
+
+#[cfg(test)]
+mod retention_tests {
+    use super::*;
+
+    fn key(artifact_id: i64) -> ArchiveKey {
+        ArchiveKey {
+            repo_id: 1,
+            run_id: 2,
+            attempt: 1,
+            artifact_id,
+            digest: format!("sha256:{artifact_id}"),
+        }
+    }
+
+    fn cfg(dir: &Path, retention_days: Option<u32>) -> ArchiveConfig {
+        ArchiveConfig {
+            artifact_prefix: "bench".into(),
+            dir: dir.to_path_buf(),
+            max_bytes: 8 * 1024 * 1024,
+            retention_days,
+        }
+    }
+
+    /// Put a row in as though it were archived `age_days` ago.
+    fn seed(ledger: &Ledger, dir: &Path, artifact_id: i64, rel: &str, age_days: i64) {
+        let path = dir.join(rel);
+        write_zip(&path, b"zip-bytes").unwrap();
+        std::fs::write(sidecar_path(&path), b"{}").unwrap();
+        ledger
+            .record_archive(&key(artifact_id), rel, ArchiveStatus::Archived)
+            .unwrap();
+        ledger
+            .backdate_archive_for_test(&key(artifact_id), age_days)
+            .unwrap();
+    }
+
+    /// The point: an archive with a horizon stops growing. Without this the
+    /// volume fills at a few hundred megabytes a night and then every pass
+    /// fails -- including the one that would have archived that night's run.
+    #[test]
+    fn a_file_past_the_horizon_is_deleted() {
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = Ledger::open(&dir.path().join("l.sqlite")).unwrap();
+        seed(&ledger, dir.path(), 1, "o/r/1/1/bench-old.zip", 40);
+        seed(&ledger, dir.path(), 2, "o/r/2/1/bench-new.zip", 1);
+
+        let mut snap = ArchiveSnapshot::default();
+        prune(&cfg(dir.path(), Some(30)), &ledger, &mut snap).unwrap();
+
+        assert!(!dir.path().join("o/r/1/1/bench-old.zip").exists());
+        assert!(dir.path().join("o/r/2/1/bench-new.zip").exists());
+        assert_eq!(snap.pruned, 1);
+        assert_eq!(snap.pruned_bytes, 9, "the freed bytes are reported");
+    }
+
+    /// The sidecar goes with it. Leaving one behind is a note naming a commit
+    /// for bytes that are gone.
+    #[test]
+    fn the_sidecar_goes_with_the_zip() {
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = Ledger::open(&dir.path().join("l.sqlite")).unwrap();
+        seed(&ledger, dir.path(), 1, "o/r/1/1/bench-old.zip", 40);
+        prune(
+            &cfg(dir.path(), Some(30)),
+            &ledger,
+            &mut ArchiveSnapshot::default(),
+        )
+        .unwrap();
+        assert!(!sidecar_path(&dir.path().join("o/r/1/1/bench-old.zip")).exists());
+    }
+
+    /// A pruned row stays terminal. Otherwise the next pass sees an unarchived
+    /// artifact, downloads it again, and retention deletes it again: an archive
+    /// that re-fetches everything it clears, forever.
+    #[test]
+    fn a_pruned_artifact_is_not_fetched_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = Ledger::open(&dir.path().join("l.sqlite")).unwrap();
+        seed(&ledger, dir.path(), 1, "o/r/1/1/bench-old.zip", 40);
+        prune(
+            &cfg(dir.path(), Some(30)),
+            &ledger,
+            &mut ArchiveSnapshot::default(),
+        )
+        .unwrap();
+        assert!(
+            ledger.archive_is_terminal(&key(1)).unwrap(),
+            "a pruned artifact must not be downloaded again"
+        );
+    }
+
+    /// And it is not pruned twice: a second pass finds nothing to do.
+    #[test]
+    fn a_second_pass_has_nothing_left_to_do() {
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = Ledger::open(&dir.path().join("l.sqlite")).unwrap();
+        seed(&ledger, dir.path(), 1, "o/r/1/1/bench-old.zip", 40);
+        prune(
+            &cfg(dir.path(), Some(30)),
+            &ledger,
+            &mut ArchiveSnapshot::default(),
+        )
+        .unwrap();
+        let mut second = ArchiveSnapshot::default();
+        prune(&cfg(dir.path(), Some(30)), &ledger, &mut second).unwrap();
+        assert_eq!(second.pruned, 0);
+    }
+
+    /// No retention configured keeps everything, which is what a deployment
+    /// that has not thought about it gets.
+    #[test]
+    fn without_a_horizon_nothing_is_deleted() {
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = Ledger::open(&dir.path().join("l.sqlite")).unwrap();
+        seed(&ledger, dir.path(), 1, "o/r/1/1/bench-old.zip", 400);
+        let mut snap = ArchiveSnapshot::default();
+        prune(&cfg(dir.path(), None), &ledger, &mut snap).unwrap();
+        assert!(dir.path().join("o/r/1/1/bench-old.zip").exists());
+        assert_eq!(snap.pruned, 0);
+    }
+
+    /// A file already gone by hand is not an error: the row is still cleared.
+    #[test]
+    fn a_file_already_missing_is_not_a_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = Ledger::open(&dir.path().join("l.sqlite")).unwrap();
+        seed(&ledger, dir.path(), 1, "o/r/1/1/bench-old.zip", 40);
+        std::fs::remove_file(dir.path().join("o/r/1/1/bench-old.zip")).unwrap();
+        let mut snap = ArchiveSnapshot::default();
+        prune(&cfg(dir.path(), Some(30)), &ledger, &mut snap).unwrap();
+        assert_eq!(snap.pruned, 1);
+        assert!(ledger.archive_is_terminal(&key(1)).unwrap());
     }
 }

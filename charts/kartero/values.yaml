@@ -64,6 +64,10 @@ archive:
   enabled: false
   artifactPrefix: bench
   maxBytes: 33554432
+  # Days an archived file is kept. Unset keeps everything, which fills the
+  # volume: bench artifacts are megabytes each and arrive nightly, and the pass
+  # that fails when it is full is the one that would have archived that night.
+  retentionDays: 30
   path: /var/lib/kartero-archive
   persistence:
     type: pvc

@@ -92,5 +92,11 @@ data:
       artifact_prefix: {{ .Values.archive.artifactPrefix | quote }}
       dir: {{ .Values.archive.path | quote }}
       max_bytes: {{ .Values.archive.maxBytes | int64 }}
+      {{- with .Values.archive.retentionDays }}
+      # Days an archived file is kept. Without it the volume grows without a
+      # horizon, and the pass that fails when it is full is the one that would
+      # have archived that night's run.
+      retention_days: {{ . | int64 }}
+      {{- end }}
     {{- end }}
 {{- end }}

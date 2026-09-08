@@ -87,6 +87,10 @@ pub struct ProcessSnapshot {
 #[derive(Debug, Default, Clone)]
 pub struct ArchiveSnapshot {
     pub duration_s: f64,
+    /// Files deleted past the retention horizon this pass.
+    pub pruned: u64,
+    /// Bytes those files freed.
+    pub pruned_bytes: u64,
     pub ok: bool,
     pub runs_seen: u64,
     pub runs_trusted: u64,
@@ -230,6 +234,8 @@ pub fn serialize_archive(snapshot: &ArchiveSnapshot) -> Value {
                 "metrics": [
                     gauge("kartero.archive.duration", "s", vec![as_double(snapshot.duration_s, &time, &run_attrs)]),
                     gauge("kartero.archive.ok", "1", vec![as_int(u64::from(snapshot.ok), &time, &run_attrs)]),
+                    gauge("kartero.archive.pruned", "{artifact}", vec![as_int(snapshot.pruned, &time, &run_attrs)]),
+                    gauge("kartero.archive.pruned_bytes", "By", vec![as_int(snapshot.pruned_bytes, &time, &run_attrs)]),
                     gauge("kartero.archive.runs", "{run}", vec![
                         as_int(snapshot.runs_seen, &time, &[str_attr("kartero.run.state", "seen")]),
                         as_int(snapshot.runs_trusted, &time, &[str_attr("kartero.run.state", "trusted")]),
@@ -561,6 +567,8 @@ mod tests {
     #[test]
     fn archive_payload_is_separate_from_collect() {
         let body = serialize_archive(&ArchiveSnapshot {
+            pruned: 3,
+            pruned_bytes: 4_096,
             duration_s: 2.0,
             ok: true,
             runs_seen: 3,

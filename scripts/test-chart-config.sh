@@ -54,6 +54,7 @@ sources:
       jobNamesArtifact: ci-job-names
 archive:
   enabled: true
+  retentionDays: 30
 allowlist:
   content: |
     metric_patterns:
@@ -101,6 +102,13 @@ for expected in \
     exit 1
   fi
 done
+
+# An archive with no horizon fills its volume and then fails every pass. The
+# field is only useful if it reaches the pod, so assert on the rendered config.
+if ! grep -q 'retention_days: 30' "$work/kartero.yaml"; then
+  echo "archive retentionDays did not reach the pod's config" >&2
+  exit 1
+fi
 
 # A field the schema permits but no template renders is accepted and silently
 # ignored, which is how the actions block itself shipped once doing nothing.
