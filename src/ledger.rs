@@ -41,6 +41,12 @@ pub struct DeliveryKey {
 pub enum ArchiveStatus {
     Archived,
     Skipped,
+    /// Archived once and since deleted by retention.
+    ///
+    /// Still terminal. The row outlives the file on purpose: without it the
+    /// next pass would see an unarchived artifact, download it again, and
+    /// retention would delete it again, forever.
+    Pruned,
 }
 
 impl ArchiveStatus {
@@ -48,8 +54,16 @@ impl ArchiveStatus {
         match self {
             ArchiveStatus::Archived => "archived",
             ArchiveStatus::Skipped => "skipped",
+            ArchiveStatus::Pruned => "pruned",
         }
     }
+}
+
+/// An archived artifact and where its bytes were put.
+#[derive(Debug, Clone)]
+pub struct ArchiveRow {
+    pub key: ArchiveKey,
+    pub object_key: String,
 }
 
 #[derive(Debug, Clone)]
@@ -164,7 +178,7 @@ impl Ledger {
             "SELECT 1 FROM archives
              WHERE repo_id = ?1 AND run_id = ?2 AND attempt = ?3
                AND artifact_id = ?4 AND digest = ?5
-               AND status IN ('archived', 'skipped')",
+               AND status IN ('archived', 'skipped', 'pruned')",
         )?;
         let exists = stmt.exists(rusqlite::params![
             key.repo_id,
@@ -174,6 +188,62 @@ impl Ledger {
             key.digest,
         ])?;
         Ok(exists)
+    }
+
+    /// Archived files older than `days`, oldest first.
+    ///
+    /// Returns the stored relative path so the caller can delete it. Rows
+    /// already pruned are excluded, so a pass does not walk what it has
+    /// already cleared.
+    pub fn archives_older_than(&self, days: u32, limit: usize) -> Result<Vec<ArchiveRow>> {
+        let conn = self.conn.lock().expect("ledger mutex");
+        let mut stmt = conn.prepare(
+            "SELECT repo_id, run_id, attempt, artifact_id, digest, object_key
+             FROM archives
+             WHERE status = 'archived'
+               AND object_key <> ''
+               AND archived_at < datetime('now', ?1)
+             ORDER BY archived_at ASC
+             LIMIT ?2",
+        )?;
+        let rows = stmt
+            .query_map(
+                rusqlite::params![format!("-{days} days"), limit as i64],
+                |row| {
+                    Ok(ArchiveRow {
+                        key: ArchiveKey {
+                            repo_id: row.get(0)?,
+                            run_id: row.get(1)?,
+                            attempt: row.get(2)?,
+                            artifact_id: row.get(3)?,
+                            digest: row.get(4)?,
+                        },
+                        object_key: row.get(5)?,
+                    })
+                },
+            )?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Move an archive row's timestamp back, for tests that need a horizon.
+    #[cfg(test)]
+    pub fn backdate_archive_for_test(&self, key: &ArchiveKey, days: i64) -> Result<()> {
+        let conn = self.conn.lock().expect("ledger mutex");
+        conn.execute(
+            "UPDATE archives SET archived_at = datetime('now', ?6)
+             WHERE repo_id = ?1 AND run_id = ?2 AND attempt = ?3
+               AND artifact_id = ?4 AND digest = ?5",
+            rusqlite::params![
+                key.repo_id,
+                key.run_id,
+                key.attempt,
+                key.artifact_id,
+                key.digest,
+                format!("-{days} days")
+            ],
+        )?;
+        Ok(())
     }
 
     pub fn record_archive(

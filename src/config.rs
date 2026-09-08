@@ -26,6 +26,14 @@ pub struct ArchiveConfig {
     pub artifact_prefix: String,
     pub dir: PathBuf,
     pub max_bytes: usize,
+    /// Days an archived file is kept. `None` keeps everything.
+    ///
+    /// Bench artifacts run to megabytes each and arrive nightly, so an archive
+    /// with no horizon fills its volume and then fails every pass -- and the
+    /// pass that fails is the one that would have archived today's run. A
+    /// number here is the difference between a bounded cost and an outage with
+    /// a delay fuse.
+    pub retention_days: Option<u32>,
 }
 
 /// One repository Kartero reads, with the workflows and branch it trusts
@@ -140,6 +148,8 @@ struct FileArchive {
     dir: PathBuf,
     #[serde(default = "default_archive_max_bytes")]
     max_bytes: usize,
+    #[serde(default)]
+    retention_days: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -418,6 +428,14 @@ fn archive_from_env() -> Result<Option<ArchiveConfig>> {
             &std::env::var("KARTERO_ARCHIVE_MAX_BYTES")
                 .unwrap_or_else(|_| default_archive_max_bytes().to_string()),
         )?,
+        retention_days: match std::env::var("KARTERO_ARCHIVE_RETENTION_DAYS") {
+            Ok(raw) => Some(
+                raw.trim()
+                    .parse()
+                    .context("KARTERO_ARCHIVE_RETENTION_DAYS is not a whole number of days")?,
+            ),
+            Err(_) => None,
+        },
     })?))
 }
 
@@ -436,6 +454,7 @@ fn archive_from_file(file: Option<FileArchive>) -> Result<Option<ArchiveConfig>>
             file.dir
         },
         max_bytes: file.max_bytes,
+        retention_days: file.retention_days,
     })?))
 }
 
@@ -449,10 +468,14 @@ fn require_archive(config: ArchiveConfig) -> Result<ArchiveConfig> {
     if config.max_bytes == 0 {
         bail!("archive max bytes must be greater than zero");
     }
+    if config.retention_days == Some(0) {
+        bail!("archive retention must be at least one day; omit it to keep everything");
+    }
     Ok(ArchiveConfig {
         artifact_prefix: config.artifact_prefix.trim().to_string(),
         dir: config.dir,
         max_bytes: config.max_bytes,
+        retention_days: config.retention_days,
     })
 }
 
@@ -515,12 +538,14 @@ mod tests {
             artifact_prefix: "bench".into(),
             dir: PathBuf::new(),
             max_bytes: 32,
+            retention_days: None,
         };
         assert!(require_archive(incomplete).is_err());
         let ready = require_archive(ArchiveConfig {
             artifact_prefix: " bench ".into(),
             dir: PathBuf::from("/var/lib/kartero-archive"),
             max_bytes: 1024,
+            retention_days: None,
         })
         .unwrap();
         assert_eq!(ready.artifact_prefix, "bench");
