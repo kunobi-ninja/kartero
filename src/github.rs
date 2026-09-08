@@ -19,6 +19,14 @@ pub struct WorkflowRun {
     /// the same instant with the same attributes — and a store keyed on that
     /// pair keeps one and drops the other without a word.
     pub observed_at: f64,
+    /// The commit this run built.
+    ///
+    /// Not an attribute on any metric -- a commit is one series per commit,
+    /// which is the cost every bounded vocabulary here exists to avoid. It is
+    /// written beside an archived artifact instead, where naming a commit
+    /// costs a line of JSON and is the only thing that turns a directory of
+    /// zips into something you can look something up in.
+    pub head_sha: String,
     pub repo_id: i64,
     pub run_id: i64,
     pub attempt: i64,
@@ -238,6 +246,7 @@ impl GitHub {
                             },
                         },
                         observed_at,
+                        head_sha: run.head_sha,
                         repo_id: run.repository.id,
                         run_id: run.id,
                         attempt: run.run_attempt,
@@ -445,6 +454,10 @@ struct RunJson {
     run_attempt: i64,
     event: String,
     head_branch: Option<String>,
+    /// The commit this run built. Absent from nothing GitHub sends, but
+    /// defaulted so a recorded fixture without it still deserialises.
+    #[serde(default)]
+    head_sha: String,
     workflow_id: i64,
     name: Option<String>,
     conclusion: Option<String>,
@@ -647,5 +660,55 @@ mod permanent_kind_through_context {
             .context("parsing")
             .unwrap_err();
         assert_eq!(permanent_kind(&err), None);
+    }
+}
+
+#[cfg(test)]
+mod head_sha_survives {
+    use super::*;
+
+    /// The commit has to reach the archive sidecar, and the only thing between
+    /// the API and it is this deserialisation. A dropped field here is silent:
+    /// `head_sha` would default to an empty string, every sidecar would name no
+    /// commit, and nothing would fail.
+    #[test]
+    fn a_runs_payload_carries_the_commit_through() {
+        // Trimmed to the fields this parses, in the shape the API sends them.
+        let raw = r#"{
+            "workflow_runs": [{
+                "id": 34074500942,
+                "run_attempt": 1,
+                "event": "schedule",
+                "head_branch": "main",
+                "head_sha": "9f3c1ab2de4501776e0d3c1a5b7e9042f8c6d1aa",
+                "workflow_id": 297515584,
+                "name": "Bench",
+                "conclusion": "failure",
+                "status": "completed",
+                "created_at": "2026-09-07T01:54:18Z",
+                "run_started_at": "2026-09-07T01:54:20Z",
+                "updated_at": "2026-09-07T04:45:02Z",
+                "path": ".github/workflows/bench.yml",
+                "repository": { "id": 7, "full_name": "kunobi-ninja/kache" }
+            }]
+        }"#;
+        let body: RunsResponse = serde_json::from_str(raw).expect("the runs payload must parse");
+        let run = &body.workflow_runs[0];
+        assert_eq!(run.head_sha, "9f3c1ab2de4501776e0d3c1a5b7e9042f8c6d1aa");
+    }
+
+    /// A recorded payload from before this field was read still deserialises,
+    /// rather than failing the whole listing for a source.
+    #[test]
+    fn a_payload_without_the_commit_still_parses() {
+        let raw = r#"{
+            "workflow_runs": [{
+                "id": 1, "run_attempt": 1, "event": "push", "head_branch": "main",
+                "workflow_id": 2, "name": "CI", "conclusion": "success",
+                "repository": { "id": 3, "full_name": "o/r" }
+            }]
+        }"#;
+        let body: RunsResponse = serde_json::from_str(raw).expect("must still parse");
+        assert!(body.workflow_runs[0].head_sha.is_empty());
     }
 }

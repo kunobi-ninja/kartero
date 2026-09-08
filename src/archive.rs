@@ -181,7 +181,7 @@ async fn archive_one(
     let zip = github
         .download_zip_limited(artifact.id, archive.max_bytes)
         .await?;
-    write_zip(&dest, &zip)?;
+    write_archived(&dest, &zip, source, run, artifact)?;
     ledger.record_archive(&key, &relative, ArchiveStatus::Archived)?;
     record_artifact(snapshot, "archived");
     info!(
@@ -192,6 +192,105 @@ async fn archive_one(
         "archived"
     );
     Ok(())
+}
+
+/// What an archived artifact belongs to, beside the artifact.
+///
+/// A directory of zips keyed on `run_id` answers "the artifact for run
+/// 34074500942" and nothing else. The question people actually arrive with is
+/// "the trace for the commit that regressed on Tuesday", and neither the path
+/// nor the metrics can answer it: the metrics carry no run id on purpose,
+/// because that is one series per run.
+///
+/// So the join lives here, in a file next to the zip, where naming a commit
+/// and an instant costs a few hundred bytes and opens no series at all.
+#[derive(serde::Serialize)]
+struct Sidecar<'a> {
+    owner: &'a str,
+    repo: &'a str,
+    /// The commit the run built. The field the whole sidecar exists for.
+    head_sha: &'a str,
+    head_branch: &'a str,
+    event: &'a str,
+    workflow: &'a str,
+    run_id: i64,
+    attempt: i64,
+    artifact: &'a str,
+    artifact_id: i64,
+    /// GitHub's digest of the artifact, so a zip can be told apart from a
+    /// re-upload under the same name.
+    digest: &'a str,
+    /// When the run was created, as GitHub reports it. The join to a metric
+    /// point, which carries a timestamp and no identifiers.
+    run_created_at: &'a str,
+    archived_at: String,
+    schema: u32,
+}
+
+/// The sidecar's own version, so a reader can tell a field that is absent from
+/// one this writer never wrote.
+const SIDECAR_SCHEMA: u32 = 1;
+
+fn sidecar_path(zip: &Path) -> PathBuf {
+    zip.with_extension("json")
+}
+
+fn write_sidecar(
+    zip: &Path,
+    source: &SourceConfig,
+    run: &WorkflowRun,
+    artifact: &ArtifactRef,
+) -> Result<()> {
+    let sidecar = Sidecar {
+        owner: &source.owner,
+        repo: &source.repo,
+        head_sha: &run.head_sha,
+        head_branch: &run.head_branch,
+        event: &run.event,
+        workflow: &run.workflow_name,
+        run_id: run.run_id,
+        attempt: run.attempt,
+        artifact: &artifact.name,
+        artifact_id: artifact.id,
+        digest: &artifact.digest,
+        run_created_at: &run.detail.created_at,
+        archived_at: now_rfc3339(),
+        schema: SIDECAR_SCHEMA,
+    };
+    let path = sidecar_path(zip);
+    let body = serde_json::to_vec_pretty(&sidecar)?;
+    write_atomic(&path, &body).with_context(|| format!("writing sidecar {}", path.display()))
+}
+
+/// `YYYY-MM-DDTHH:MM:SSZ`, formatted from the clock rather than pulled in with
+/// a date library for one field.
+fn now_rfc3339() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
+    let (year, month, day) = civil_from_days(days);
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        rem / 3_600,
+        (rem % 3_600) / 60,
+        rem % 60
+    )
+}
+
+/// The inverse of the civil-date algorithm `github` uses for token expiry.
+fn civil_from_days(days: i64) -> (i64, i64, i64) {
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    (y + i64::from(m <= 2), m, d)
 }
 
 pub fn relative_path(
@@ -215,12 +314,40 @@ fn archive_dest(root: &Path, relative: &str) -> Result<PathBuf> {
     Ok(dest)
 }
 
+/// The zip and the note saying what it belongs to, together.
+///
+/// One function rather than two calls, because they are not independently
+/// useful: a zip with no sidecar is a file keyed on a run id nobody can map to
+/// a commit, which is the state this whole thing exists to leave behind.
+fn write_archived(
+    dest: &Path,
+    zip: &[u8],
+    source: &SourceConfig,
+    run: &WorkflowRun,
+    artifact: &ArtifactRef,
+) -> Result<()> {
+    write_zip(dest, zip)?;
+    write_sidecar(dest, source, run, artifact)
+}
+
 fn write_zip(dest: &Path, bytes: &[u8]) -> Result<()> {
+    write_atomic(dest, bytes)
+}
+
+/// Write through a sibling temporary file and rename.
+///
+/// A reader that finds the final name finds a whole file: an archive pass that
+/// dies mid-write leaves a `.partial` nobody reads rather than a truncated zip
+/// or a sidecar naming a commit for bytes that were never finished.
+fn write_atomic(dest: &Path, bytes: &[u8]) -> Result<()> {
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("creating {}", parent.display()))?;
     }
-    let tmp = dest.with_extension("zip.partial");
+    let tmp = dest.with_extension(match dest.extension().and_then(|e| e.to_str()) {
+        Some(ext) => format!("{ext}.partial"),
+        None => "partial".to_string(),
+    });
     std::fs::write(&tmp, bytes).with_context(|| format!("writing {}", tmp.display()))?;
     std::fs::rename(&tmp, dest).with_context(|| format!("renaming {}", dest.display()))?;
     Ok(())
@@ -307,5 +434,135 @@ mod tests {
             "telemetry-otlp-v1-firefox",
             "bench"
         ));
+    }
+}
+
+#[cfg(test)]
+mod sidecar_tests {
+    use super::*;
+
+    fn run(head_sha: &str) -> WorkflowRun {
+        WorkflowRun {
+            detail: crate::actions::RunAttempt {
+                id: 34_074_500_942,
+                run_attempt: 1,
+                event: "schedule".into(),
+                status: "completed".into(),
+                conclusion: Some("failure".into()),
+                created_at: "2026-09-07T01:54:18Z".into(),
+                run_started_at: "2026-09-07T01:54:20Z".into(),
+                path: ".github/workflows/bench.yml".into(),
+                head_branch: Some("main".into()),
+                repository: crate::actions::model::Repository {
+                    full_name: "kunobi-ninja/kache".into(),
+                },
+            },
+            observed_at: 0.0,
+            head_sha: head_sha.into(),
+            repo_id: 7,
+            run_id: 34_074_500_942,
+            attempt: 1,
+            event: "schedule".into(),
+            head_branch: "main".into(),
+            workflow_id: 297_515_584,
+            workflow_name: "Bench".into(),
+            conclusion: Some("failure".into()),
+        }
+    }
+
+    fn source() -> SourceConfig {
+        SourceConfig {
+            token: String::new(),
+            owner: "kunobi-ninja".into(),
+            repo: "kache".into(),
+            workflows: vec!["bench.yml".into()],
+            trusted_branch: "main".into(),
+            actions: None,
+        }
+    }
+
+    fn artifact() -> ArtifactRef {
+        ArtifactRef {
+            id: 10_004_612_582,
+            name: "bench-substrate".into(),
+            digest: "sha256:abc".into(),
+            size_in_bytes: 1_856_417,
+            expired: false,
+        }
+    }
+
+    /// The whole point: a zip on disk can be traced back to the commit that
+    /// produced it. The path carries a run id and nothing else, and the metrics
+    /// carry no run id at all, so without this a directory of archives answers
+    /// no question anyone actually arrives with.
+    #[test]
+    fn a_zip_can_be_traced_back_to_its_commit() {
+        let dir = tempfile::tempdir().unwrap();
+        let zip = dir
+            .path()
+            .join("kunobi-ninja/kache/34074500942/1/bench-substrate.zip");
+        write_archived(
+            &zip,
+            b"zip-bytes",
+            &source(),
+            &run("9f3c1ab2de4501776e0d3c1a5b7e9042f8c6d1aa"),
+            &artifact(),
+        )
+        .unwrap();
+
+        let side = sidecar_path(&zip);
+        let read: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&side).unwrap()).unwrap();
+        assert_eq!(read["head_sha"], "9f3c1ab2de4501776e0d3c1a5b7e9042f8c6d1aa");
+        assert_eq!(read["artifact"], "bench-substrate");
+        assert_eq!(read["run_id"], 34_074_500_942_i64);
+        assert_eq!(read["workflow"], "Bench");
+    }
+
+    /// The other join. A metric point carries a timestamp and no identifiers,
+    /// so the run's own creation time is what lets a regression seen at an
+    /// instant reach the artifact that produced it.
+    #[test]
+    fn it_carries_the_run_time_a_metric_point_can_be_joined_on() {
+        let dir = tempfile::tempdir().unwrap();
+        let zip = dir.path().join("a.zip");
+        write_archived(&zip, b"z", &source(), &run("abc"), &artifact()).unwrap();
+        let read: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(sidecar_path(&zip)).unwrap()).unwrap();
+        assert_eq!(read["run_created_at"], "2026-09-07T01:54:18Z");
+        let archived = read["archived_at"].as_str().unwrap();
+        assert!(
+            archived.len() == 20 && archived.ends_with('Z') && archived.starts_with("20"),
+            "archived_at is not an RFC3339 instant: {archived}"
+        );
+    }
+
+    /// It sits beside the zip under the same name, so finding one from the
+    /// other needs no index.
+    #[test]
+    fn it_sits_beside_the_zip() {
+        let zip = Path::new("/archive/o/r/1/1/bench-firefox.zip");
+        assert_eq!(
+            sidecar_path(zip),
+            Path::new("/archive/o/r/1/1/bench-firefox.json")
+        );
+    }
+
+    /// A partial write must never be readable under the final name: a sidecar
+    /// naming a commit for a zip that was never finished is worse than none.
+    #[test]
+    fn a_sidecar_is_written_atomically() {
+        let dir = tempfile::tempdir().unwrap();
+        let zip = dir.path().join("a.zip");
+        write_archived(&zip, b"z", &source(), &run("abc"), &artifact()).unwrap();
+        assert!(!dir.path().join("a.json.partial").exists());
+        assert!(sidecar_path(&zip).exists());
+    }
+
+    #[test]
+    fn the_instant_formatter_agrees_with_a_known_epoch() {
+        // 1788782058 == 2026-09-07T11:54:18Z
+        let (y, m, d) = civil_from_days(1_788_782_058_i64.div_euclid(86_400));
+        assert_eq!((y, m, d), (2026, 9, 7));
     }
 }
