@@ -85,3 +85,51 @@ fn every_field_the_schema_accepts_is_rendered_by_a_template() {
          does nothing and says nothing: {unrendered:?}"
     );
 }
+
+/// Every object in the schema must refuse fields it does not declare.
+///
+/// A block without `additionalProperties: false` accepts anything and renders
+/// none of it. `sources[].actions` was the only one that had it, which is why
+/// a misspelt field there fails loudly and the same mistake under `archive`
+/// would have been silent -- and nearly was: `retentionDays` was accepted by
+/// the published chart, which knew nothing about it, and did nothing.
+///
+/// The sibling test above catches a field the schema declares and no template
+/// renders. This catches the other direction: a field the schema never
+/// declared, waved through.
+#[test]
+fn every_object_refuses_fields_it_does_not_declare() {
+    let schema: Value = serde_json::from_str(SCHEMA).expect("values.schema.json parses");
+    let mut open = Vec::new();
+    collect_open_objects(&schema, "", &mut open);
+    assert!(
+        open.is_empty(),
+        "these accept any field and render none of it, so a typo or an unreleased \
+         setting is taken and silently ignored: {open:?}"
+    );
+}
+
+fn collect_open_objects(node: &Value, path: &str, out: &mut Vec<String>) {
+    let is_object = node.get("type").and_then(Value::as_str) == Some("object");
+    let has_props = node.get("properties").is_some();
+    if is_object && has_props && node.get("additionalProperties").is_none() {
+        out.push(if path.is_empty() {
+            "(root)".to_string()
+        } else {
+            path.to_string()
+        });
+    }
+    if let Some(props) = node.get("properties").and_then(Value::as_object) {
+        for (name, child) in props {
+            let child_path = if path.is_empty() {
+                name.clone()
+            } else {
+                format!("{path}/{name}")
+            };
+            collect_open_objects(child, &child_path, out);
+        }
+    }
+    if let Some(items) = node.get("items") {
+        collect_open_objects(items, &format!("{path}[]"), out);
+    }
+}

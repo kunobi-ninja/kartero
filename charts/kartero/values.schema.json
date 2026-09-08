@@ -1,6 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft-07/schema#",
   "type": "object",
+  "additionalProperties": false,
   "properties": {
     "replicaCount": {
       "type": "integer",
@@ -8,32 +9,75 @@
     },
     "image": {
       "type": "object",
+      "additionalProperties": false,
       "properties": {
-        "repository": { "type": "string", "minLength": 1 },
-        "tag": { "type": "string" },
+        "repository": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tag": {
+          "type": "string"
+        },
         "pullPolicy": {
           "type": "string",
-          "enum": ["Always", "IfNotPresent", "Never"]
+          "enum": [
+            "Always",
+            "IfNotPresent",
+            "Never"
+          ]
         }
       },
-      "required": ["repository", "pullPolicy"]
+      "required": [
+        "repository",
+        "pullPolicy"
+      ]
     },
     "github": {
       "type": "object",
+      "additionalProperties": false,
       "properties": {
-        "owner": { "type": "string", "minLength": 1 },
-        "repo": { "type": "string", "minLength": 1 },
+        "owner": {
+          "type": "string",
+          "minLength": 1
+        },
+        "repo": {
+          "type": "string",
+          "minLength": 1
+        },
         "workflows": {
           "type": "array",
           "minItems": 1,
           "uniqueItems": true,
-          "items": { "type": "string", "minLength": 1 }
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
         },
-        "artifactPrefix": { "type": "string", "minLength": 1 },
-        "existingSecret": { "type": "string", "minLength": 1 },
-        "existingSecretKey": { "type": "string", "minLength": 1 }
+        "artifactPrefix": {
+          "type": "string",
+          "minLength": 1
+        },
+        "existingSecret": {
+          "type": "string",
+          "minLength": 1
+        },
+        "existingSecretKey": {
+          "type": "string",
+          "minLength": 1
+        },
+        "trustedBranch": {
+          "type": "string",
+          "minLength": 1
+        }
       },
-      "required": ["owner", "repo", "workflows", "artifactPrefix", "existingSecret", "existingSecretKey"]
+      "required": [
+        "owner",
+        "repo",
+        "workflows",
+        "artifactPrefix",
+        "existingSecret",
+        "existingSecretKey"
+      ]
     },
     "sources": {
       "type": "array",
@@ -41,118 +85,329 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "owner": { "type": "string", "minLength": 1 },
-          "repo": { "type": "string", "minLength": 1 },
+          "owner": {
+            "type": "string",
+            "minLength": 1
+          },
+          "repo": {
+            "type": "string",
+            "minLength": 1
+          },
           "workflows": {
             "type": "array",
             "minItems": 1,
             "uniqueItems": true,
-            "items": { "type": "string", "minLength": 1 }
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
           },
-          "trustedBranch": { "type": "string", "minLength": 1 },
+          "trustedBranch": {
+            "type": "string",
+            "minLength": 1
+          },
           "actions": {
             "type": "object",
             "additionalProperties": false,
             "properties": {
-              "gateJob": { "type": "string", "minLength": 1 },
-              "guardJob": { "type": "string", "minLength": 1 },
-              "guardStep": { "type": "string", "minLength": 1 },
-              "filterJob": { "type": "string", "minLength": 1 },
-              "docsJob": { "type": "string", "minLength": 1 },
-              "branchClasses": { "type": "object", "additionalProperties": { "type": "string", "minLength": 1 } },
-              "jobAliases": { "type": "object", "additionalProperties": { "type": "string", "minLength": 1 } },
-              "canonicalJobs": { "type": "array", "items": { "type": "string", "minLength": 1 } },
-              "jobNamesArtifact": { "type": "string", "minLength": 1 },
-              "excludedWorkflows": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+              "gateJob": {
+                "type": "string",
+                "minLength": 1
+              },
+              "guardJob": {
+                "type": "string",
+                "minLength": 1
+              },
+              "guardStep": {
+                "type": "string",
+                "minLength": 1
+              },
+              "filterJob": {
+                "type": "string",
+                "minLength": 1
+              },
+              "docsJob": {
+                "type": "string",
+                "minLength": 1
+              },
+              "branchClasses": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "jobAliases": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "canonicalJobs": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "jobNamesArtifact": {
+                "type": "string",
+                "minLength": 1
+              },
+              "excludedWorkflows": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
             },
-            "required": ["gateJob", "guardJob", "guardStep", "filterJob", "docsJob"]
+            "required": [
+              "gateJob",
+              "guardJob",
+              "guardStep",
+              "filterJob",
+              "docsJob"
+            ]
           },
-          "existingSecret": { "type": "string", "minLength": 1 },
-          "existingSecretKey": { "type": "string", "minLength": 1 }
+          "existingSecret": {
+            "type": "string",
+            "minLength": 1
+          },
+          "existingSecretKey": {
+            "type": "string",
+            "minLength": 1
+          }
         },
-        "required": ["owner", "repo", "workflows", "existingSecret", "existingSecretKey"]
+        "required": [
+          "owner",
+          "repo",
+          "workflows",
+          "existingSecret",
+          "existingSecretKey"
+        ]
       }
     },
     "allowlist": {
       "type": "object",
+      "additionalProperties": false,
       "properties": {
-        "mountPath": { "type": "string", "minLength": 1 },
-        "content": { "type": "string" }
+        "mountPath": {
+          "type": "string",
+          "minLength": 1
+        },
+        "content": {
+          "type": "string"
+        }
       }
     },
     "config": {
       "type": "object",
+      "additionalProperties": false,
       "properties": {
-        "mountPath": { "type": "string", "minLength": 1 }
+        "mountPath": {
+          "type": "string",
+          "minLength": 1
+        }
       },
-      "required": ["mountPath"]
+      "required": [
+        "mountPath"
+      ]
     },
     "otlp": {
       "type": "object",
+      "additionalProperties": false,
       "properties": {
-        "endpoint": { "type": "string", "minLength": 1 }
+        "endpoint": {
+          "type": "string",
+          "minLength": 1
+        }
       },
-      "required": ["endpoint"]
+      "required": [
+        "endpoint"
+      ]
     },
-    "interval": { "type": "string", "minLength": 1 },
-    "heartbeatInterval": { "type": "string", "minLength": 1 },
+    "interval": {
+      "type": "string",
+      "minLength": 1
+    },
+    "heartbeatInterval": {
+      "type": "string",
+      "minLength": 1
+    },
     "ledger": {
       "type": "object",
+      "additionalProperties": false,
       "properties": {
-        "path": { "type": "string", "minLength": 1 },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
         "persistence": {
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "type": { "type": "string", "enum": ["ephemeral", "pvc"] },
-            "mountPath": { "type": "string", "minLength": 1 },
-            "size": { "type": "string", "minLength": 1 },
-            "storageClassName": { "type": "string" },
+            "type": {
+              "type": "string",
+              "enum": [
+                "ephemeral",
+                "pvc"
+              ]
+            },
+            "mountPath": {
+              "type": "string",
+              "minLength": 1
+            },
+            "size": {
+              "type": "string",
+              "minLength": 1
+            },
+            "storageClassName": {
+              "type": "string"
+            },
             "accessModes": {
               "type": "array",
               "minItems": 1,
-              "items": { "type": "string", "minLength": 1 }
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
             }
           },
-          "required": ["type", "mountPath", "size", "accessModes"]
+          "required": [
+            "type",
+            "mountPath",
+            "size",
+            "accessModes"
+          ]
         }
       }
     },
     "service": {
       "type": "object",
+      "additionalProperties": false,
       "properties": {
-        "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "type": {
+          "type": "string"
+        },
+        "annotations": {
+          "type": "object"
+        }
       }
     },
     "signoz": {
       "type": "object",
+      "additionalProperties": false,
       "properties": {
-        "scrape": { "type": "boolean" },
-        "path": { "type": "string" }
+        "scrape": {
+          "type": "boolean"
+        },
+        "path": {
+          "type": "string"
+        }
       }
     },
     "archive": {
       "type": "object",
+      "additionalProperties": false,
       "properties": {
-        "enabled": { "type": "boolean" },
-        "artifactPrefix": { "type": "string", "minLength": 1 },
-        "maxBytes": { "type": "integer", "minimum": 1 },
-        "retentionDays": { "type": "integer", "minimum": 1 },
-        "path": { "type": "string", "minLength": 1 },
+        "enabled": {
+          "type": "boolean"
+        },
+        "artifactPrefix": {
+          "type": "string",
+          "minLength": 1
+        },
+        "maxBytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "retentionDays": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
         "persistence": {
           "type": "object",
+          "additionalProperties": false,
           "properties": {
-            "type": { "type": "string", "enum": ["ephemeral", "pvc"] },
-            "size": { "type": "string", "minLength": 1 },
-            "storageClassName": { "type": "string" },
+            "type": {
+              "type": "string",
+              "enum": [
+                "ephemeral",
+                "pvc"
+              ]
+            },
+            "size": {
+              "type": "string",
+              "minLength": 1
+            },
+            "storageClassName": {
+              "type": "string"
+            },
             "accessModes": {
               "type": "array",
               "minItems": 1,
-              "items": { "type": "string", "minLength": 1 }
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
             }
           }
         }
       }
+    },
+    "nameOverride": {
+      "type": "string"
+    },
+    "fullnameOverride": {
+      "type": "string"
+    },
+    "logLevel": {
+      "type": "string",
+      "minLength": 1
+    },
+    "imagePullSecrets": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "podAnnotations": {
+      "type": "object"
+    },
+    "podLabels": {
+      "type": "object"
+    },
+    "podSecurityContext": {
+      "type": "object"
+    },
+    "containerSecurityContext": {
+      "type": "object"
+    },
+    "resources": {
+      "type": "object"
+    },
+    "nodeSelector": {
+      "type": "object"
+    },
+    "tolerations": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "affinity": {
+      "type": "object"
     }
   }
 }
