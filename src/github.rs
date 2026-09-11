@@ -269,31 +269,42 @@ impl GitHub {
         Ok(completed)
     }
 
+    /// Every artifact of a run, not the first page of them.
+    ///
+    /// The endpoint returns 30 by default. A nightly bench uploads about 60,
+    /// in the order its jobs finish, so an unpaged listing silently skipped
+    /// whichever benches happened to finish last.
     pub async fn list_artifacts(&self, run_id: i64) -> Result<Vec<ArtifactRef>> {
-        let url = format!(
-            "https://api.github.com/repos/{}/{}/actions/runs/{run_id}/artifacts",
-            self.config.owner, self.config.repo
-        );
-        let body: ArtifactsResponse = self
-            .client
-            .get(url)
-            .send()
-            .await?
-            .error_for_status()?
-            .json()
-            .await
-            .context("listing artifacts")?;
-        Ok(body
-            .artifacts
-            .into_iter()
-            .map(|a| ArtifactRef {
+        let mut all = Vec::new();
+        for page in 1..=10 {
+            let url = format!(
+                "https://api.github.com/repos/{}/{}/actions/runs/{run_id}/artifacts?per_page=100&page={page}",
+                self.config.owner, self.config.repo
+            );
+            let response = self.client.get(url).send().await?;
+            self.record_token_expiry(response.headers());
+            if let Some(failure) = self.classify(response.status(), response.headers(), "artifacts")
+            {
+                return Err(failure.into());
+            }
+            let body: ArtifactsResponse = response
+                .error_for_status()?
+                .json()
+                .await
+                .with_context(|| format!("listing artifacts for run {run_id}"))?;
+            let count = body.artifacts.len();
+            all.extend(body.artifacts.into_iter().map(|a| ArtifactRef {
                 id: a.id,
                 name: a.name,
                 digest: a.digest.unwrap_or_default(),
                 size_in_bytes: a.size_in_bytes,
                 expired: a.expired,
-            })
-            .collect())
+            }));
+            if count < 100 {
+                break;
+            }
+        }
+        Ok(all)
     }
 
     pub async fn list_jobs(
