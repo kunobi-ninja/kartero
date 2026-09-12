@@ -16,8 +16,10 @@
 metric_patterns:
   # Benchmark and daemon telemetry from kache.
   - 'kache\.(bench|cache|prefetch|ci)\..+'
-  # Pipeline telemetry from any collected repository.
-  - 'ci\.(run|job|coverage|collector)\..+'
+  # Pipeline telemetry from any collected repository. `probe` carries per-unit
+  # cost measurements a repository's own test suite writes — facts per note,
+  # rows per revision, milliseconds per row.
+  - 'ci\.(run|job|coverage|collector|probe)\..+'
 
 metrics: []
 
