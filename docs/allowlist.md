@@ -10,7 +10,7 @@ Names are admitted individually, by family, or both.
 ```yaml
 metric_patterns:
   - 'kache\.(bench|cache|prefetch|ci)\..+'
-  - 'ci\.(run|job|coverage|collector)\..+'
+  - 'ci\.(run|job|coverage|collector|probe)\..+'
 
 metrics:
   - some.exact.name
