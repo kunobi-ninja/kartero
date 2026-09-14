@@ -4,13 +4,15 @@ set -euo pipefail
 expected="${1:-}"
 cargo_version="$(awk -F '"' '/^version = "/ { print $2; exit }' Cargo.toml)"
 npm_version="$(node -p "require('./packages/cli/package.json').version")"
+npm_lock_version="$(node -p "require('./packages/cli/package-lock.json').version")"
+npm_lock_root_version="$(node -p "require('./packages/cli/package-lock.json').packages[''].version")"
 chart_version="$(awk '/^version:/ { print $2; exit }' charts/kartero/Chart.yaml)"
 app_version="$(awk '/^appVersion:/ { gsub(/\"/, "", $2); print $2; exit }' charts/kartero/Chart.yaml)"
 
-versions=("$cargo_version" "$npm_version" "$chart_version" "$app_version")
+versions=("$cargo_version" "$npm_version" "$npm_lock_version" "$npm_lock_root_version" "$chart_version" "$app_version")
 for version in "${versions[@]}"; do
   if [[ "$version" != "$cargo_version" ]]; then
-    echo "version mismatch: Cargo=$cargo_version npm=$npm_version chart=$chart_version app=$app_version" >&2
+    echo "version mismatch: Cargo=$cargo_version npm=$npm_version npm-lock=$npm_lock_version npm-lock-root=$npm_lock_root_version chart=$chart_version app=$app_version" >&2
     exit 1
   fi
 done
@@ -19,7 +21,7 @@ done
 node - "$cargo_version" <<'NODE'
 const fs = require('node:fs');
 const expected = process.argv[2];
-for (const file of ['README.md', 'docs/coverage.md', 'docs/gauges.md', 'docs/deployment.md', 'docs/releasing.md']) {
+for (const file of ['README.md', 'packages/cli/README.md', 'docs/coverage.md', 'docs/gauges.md', 'docs/deployment.md', 'docs/releasing.md']) {
   const text = fs.readFileSync(file, 'utf8');
   const examples = text.matchAll(/@kunobi\/kartero@(\d+\.\d+\.\d+)|--version (\d+\.\d+\.\d+)|check-version-consistency\.sh v(\d+\.\d+\.\d+)/g);
   for (const match of examples) {
