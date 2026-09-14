@@ -17,6 +17,13 @@ pub struct SourceStatus {
     pub up: bool,
 }
 
+#[derive(Debug, Clone)]
+pub struct SourceDelivery {
+    pub slug: String,
+    pub family: String,
+    pub unix_seconds: u64,
+}
+
 /// Something a derivation had to give up on, counted per source and kind.
 ///
 /// A rule that starts firing constantly is why a panel would go flat: a
@@ -52,6 +59,9 @@ pub struct CollectSnapshot {
     /// Run attempts whose metrics were derived and delivered this pass.
     pub attempts_derived: u64,
     pub source_status: Vec<SourceStatus>,
+    pub source_last_delivery: Vec<SourceDelivery>,
+    pub pending_count: u64,
+    pub pending_bytes: u64,
     /// `(source, unix seconds)` for tokens that expire.
     pub token_expiry: Vec<(String, i64)>,
     /// What the derivations had to throw away this pass, and why.
@@ -146,6 +156,9 @@ pub fn serialize(snapshot: &CollectSnapshot) -> Value {
                     gauge("kartero.collect.sources_misconfigured", "{source}", vec![as_int(snapshot.sources_misconfigured, &time, &run_attrs)]),
                     gauge("kartero.collect.attempts_derived", "{attempt}", vec![as_int(snapshot.attempts_derived, &time, &run_attrs)]),
                     gauge("kartero.collect.source_up", "1", source_points(snapshot, &time)),
+                    gauge("kartero.collect.source_last_delivery", "s", delivery_points(snapshot, &time)),
+                    gauge("kartero.collect.pending_metrics", "{payload}", vec![as_int(snapshot.pending_count, &time, &run_attrs)]),
+                    gauge("kartero.collect.pending_metrics_bytes", "By", vec![as_int(snapshot.pending_bytes, &time, &run_attrs)]),
                     gauge("kartero.collect.source_token_expires", "s", token_expiry_points(snapshot, &time)),
                     gauge("kartero.collect.anomalies", "{anomaly}", anomaly_points(snapshot, &time)),
                     gauge("kartero.collect.runs", "{run}", vec![
@@ -332,6 +345,23 @@ fn source_points(snapshot: &CollectSnapshot, time: &str) -> Vec<Value> {
         .collect()
 }
 
+fn delivery_points(snapshot: &CollectSnapshot, time: &str) -> Vec<Value> {
+    snapshot
+        .source_last_delivery
+        .iter()
+        .map(|delivery| {
+            as_int(
+                delivery.unix_seconds,
+                time,
+                &[
+                    str_attr("kartero.source", &delivery.slug),
+                    str_attr("kartero.metric.family", &delivery.family),
+                ],
+            )
+        })
+        .collect()
+}
+
 /// One point per source and anomaly kind seen this pass.
 ///
 /// Both attributes are bounded: the source slugs are configured, and the kind
@@ -412,6 +442,13 @@ mod tests {
                     up: false,
                 },
             ],
+            source_last_delivery: vec![SourceDelivery {
+                slug: "Zondax/kunobi-frontend".into(),
+                family: "ci.probe".into(),
+                unix_seconds: 1_820_322_862,
+            }],
+            pending_count: 2,
+            pending_bytes: 512,
             sources_misconfigured: 1,
             attempts_derived: 7,
             token_expiry: vec![("Zondax/kunobi-frontend".into(), 1_820_322_862)],
@@ -448,6 +485,8 @@ mod tests {
         assert!(names.contains(&"kartero.collect.series_dropped"));
         assert!(names.contains(&"kartero.collect.sources"));
         assert!(names.contains(&"kartero.collect.source_up"));
+        assert!(names.contains(&"kartero.collect.source_last_delivery"));
+        assert!(names.contains(&"kartero.collect.pending_metrics_bytes"));
         assert!(names.contains(&"kartero.collect.sources_misconfigured"));
         assert!(names.contains(&"kartero.collect.attempts_derived"));
         assert!(names.contains(&"kartero.collect.source_token_expires"));
@@ -460,6 +499,22 @@ mod tests {
             &body["resourceMetrics"][0]["scopeMetrics"][0]["metrics"][0]["gauge"]["dataPoints"][0];
         assert!(duration["timeUnixNano"].is_string());
         assert_eq!(duration["asDouble"], 1.5);
+        let freshness = body["resourceMetrics"][0]["scopeMetrics"][0]["metrics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|metric| metric["name"] == "kartero.collect.source_last_delivery")
+            .unwrap();
+        let point = &freshness["gauge"]["dataPoints"][0];
+        assert_eq!(point["asInt"], "1820322862");
+        assert!(
+            point["attributes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|attribute| attribute["key"] == "kartero.metric.family"
+                    && attribute["value"]["stringValue"] == "ci.probe")
+        );
     }
 
     /// The name being in the list proves only that a gauge was declared. What

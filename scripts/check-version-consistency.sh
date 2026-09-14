@@ -15,6 +15,23 @@ for version in "${versions[@]}"; do
   fi
 done
 
+# Keep copyable installation commands on the version shipped by this tree.
+node - "$cargo_version" <<'NODE'
+const fs = require('node:fs');
+const expected = process.argv[2];
+for (const file of ['README.md', 'docs/coverage.md', 'docs/gauges.md', 'docs/deployment.md', 'docs/releasing.md']) {
+  const text = fs.readFileSync(file, 'utf8');
+  const examples = text.matchAll(/@kunobi\/kartero@(\d+\.\d+\.\d+)|--version (\d+\.\d+\.\d+)|check-version-consistency\.sh v(\d+\.\d+\.\d+)/g);
+  for (const match of examples) {
+    const version = match[1] ?? match[2] ?? match[3];
+    if (version !== expected) {
+      console.error(`${file}: installation example uses ${version}, expected ${expected}`);
+      process.exitCode = 1;
+    }
+  }
+}
+NODE
+
 if [[ -n "$expected" ]]; then
   expected="${expected#v}"
   if [[ "$expected" != "$cargo_version" ]]; then

@@ -49,9 +49,10 @@ has to land three days ago, not at the moment of the sweep. One artifact can
 carry points spanning a week, and OTLP allows that because the timestamp lives
 on the data point rather than on the request.
 
-**The producer keeps its own ledger.** Kartero's ledger stops one artifact
-being delivered twice. It cannot stop two artifacts describing overlapping
-windows, and for delta counters that difference matters — see
+**The producer keeps its own ledger.** Kartero's ledger suppresses a repeat
+after recording delivery. It cannot stop two artifacts describing overlapping
+windows, or a resend after a crash between OTLP acceptance and the ledger
+write. For delta counters that difference matters — see
 [replay and delta counters](artifact-protocol.md#replay-and-delta-counters).
 A sweep therefore records which units of work it has already reported and
 derives nothing for them again. The unit is usually an attempt rather than a

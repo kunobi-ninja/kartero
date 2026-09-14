@@ -144,6 +144,15 @@ async fn archive_source(
             continue;
         }
         snapshot.runs_trusted += 1;
+        if !ledger.should_scan_artifacts(
+            "archive",
+            run.repo_id,
+            run.run_id,
+            run.attempt,
+            run.observed_at,
+        )? {
+            continue;
+        }
         let artifacts = match github.list_artifacts(run.run_id).await {
             Ok(list) => list,
             Err(err) => {
@@ -154,6 +163,7 @@ async fn archive_source(
             }
         };
         snapshot.artifacts_seen += artifacts.len() as u64;
+        let mut run_had_errors = false;
         for artifact in artifacts {
             if !github::artifact_name_matches(&artifact.name, &archive.artifact_prefix) {
                 continue;
@@ -172,7 +182,11 @@ async fn archive_source(
                 record_artifact(snapshot, "retryable");
                 snapshot.store_errors += 1;
                 had_errors = true;
+                run_had_errors = true;
             }
+        }
+        if !run_had_errors {
+            ledger.mark_artifacts_scanned("archive", run.repo_id, run.run_id, run.attempt)?;
         }
     }
     if had_errors {

@@ -40,12 +40,35 @@ pub struct FilterStats {
     pub points_dropped: u64,
 }
 
+/// The accepted body and the original metrics or points that the allowlist
+/// withheld. Replaying only `deferred` avoids sending accepted delta points a
+/// second time after a later allowlist change.
+pub struct Partition {
+    pub accepted: Option<Vec<u8>>,
+    pub deferred: Option<Vec<u8>>,
+    pub stats: FilterStats,
+}
+
 pub fn prepare(
     metrics_json: &[u8],
     allowlist: &Allowlist,
     envelope: &Envelope,
 ) -> Result<(Vec<u8>, FilterStats)> {
+    let partition = partition(metrics_json, allowlist, envelope)?;
+    let Some(accepted) = partition.accepted else {
+        bail!("allowlist dropped every metric");
+    };
+    Ok((accepted, partition.stats))
+}
+
+pub fn partition(
+    metrics_json: &[u8],
+    allowlist: &Allowlist,
+    envelope: &Envelope,
+) -> Result<Partition> {
     let mut body: Value = serde_json::from_slice(metrics_json)?;
+    let mut deferred_body = shell_without(&body, "resourceMetrics");
+    deferred_body["resourceMetrics"] = json!([]);
     let Some(resource_metrics) = body
         .get_mut("resourceMetrics")
         .and_then(Value::as_array_mut)
@@ -61,14 +84,47 @@ pub fn prepare(
 
     let mut stats = FilterStats::default();
     for rm in resource_metrics.iter_mut() {
+        let mut deferred_rm = shell_without(rm, "scopeMetrics");
+        deferred_rm["scopeMetrics"] = json!([]);
         rewrite_resource(rm, envelope, allowlist)?;
-        filter_scope_metrics(rm, allowlist, &mut stats)?;
+        filter_scope_metrics(rm, allowlist, &mut stats, &mut deferred_rm)?;
+        if !deferred_rm["scopeMetrics"].as_array().unwrap().is_empty() {
+            deferred_body["resourceMetrics"]
+                .as_array_mut()
+                .unwrap()
+                .push(deferred_rm);
+        }
     }
+    let deferred = if deferred_body["resourceMetrics"]
+        .as_array()
+        .unwrap()
+        .is_empty()
+    {
+        None
+    } else {
+        Some(serde_json::to_vec(&deferred_body)?)
+    };
+    if stats.metrics_kept == 0 && deferred.is_none() {
+        bail!("allowlist dropped every metric: payload has no supported metrics or points");
+    }
+    Ok(Partition {
+        accepted: (stats.metrics_kept > 0)
+            .then(|| serde_json::to_vec(&body))
+            .transpose()?,
+        deferred,
+        stats,
+    })
+}
 
-    if stats.metrics_kept == 0 {
-        bail!("allowlist dropped every metric");
-    }
-    Ok((serde_json::to_vec(&body)?, stats))
+fn shell_without(value: &Value, excluded: &str) -> Value {
+    let fields = value
+        .as_object()
+        .into_iter()
+        .flat_map(|fields| fields.iter())
+        .filter(|(key, _)| key.as_str() != excluded)
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    Value::Object(fields)
 }
 
 fn rewrite_resource(rm: &mut Value, envelope: &Envelope, allowlist: &Allowlist) -> Result<()> {
@@ -102,6 +158,7 @@ fn filter_scope_metrics(
     rm: &mut Value,
     allowlist: &Allowlist,
     stats: &mut FilterStats,
+    deferred_rm: &mut Value,
 ) -> Result<()> {
     let Some(scopes) = rm.get_mut("scopeMetrics").and_then(Value::as_array_mut) else {
         return Ok(());
@@ -110,6 +167,8 @@ fn filter_scope_metrics(
         bail!("resource has too many scopeMetrics entries");
     }
     for scope in scopes.iter_mut() {
+        let mut deferred_scope = shell_without(scope, "metrics");
+        deferred_scope["metrics"] = json!([]);
         let Some(metrics) = scope.get_mut("metrics").and_then(Value::as_array_mut) else {
             continue;
         };
@@ -122,10 +181,37 @@ fn filter_scope_metrics(
                 .to_string();
             if !allowlist.allows_metric(&name) {
                 stats.metrics_dropped += 1;
+                let mut instruments = INSTRUMENTS
+                    .into_iter()
+                    .filter(|instrument| metric.get(*instrument).is_some());
+                if let (Some(instrument), None) = (instruments.next(), instruments.next())
+                    && metric
+                        .pointer(&format!("/{instrument}/dataPoints"))
+                        .and_then(Value::as_array)
+                        .is_some_and(|points| !points.is_empty())
+                {
+                    deferred_scope["metrics"]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(metric);
+                }
                 continue;
             }
             let mut metric = metric;
-            if !filter_points(&mut metric, &name, allowlist, stats)? {
+            let (has_points, dropped_points) = filter_points(&mut metric, &name, allowlist, stats)?;
+            if !dropped_points.is_empty()
+                && let Some(instrument) = instrument_of(&metric, &name)?
+            {
+                let mut deferred_metric = shell_without(&metric, instrument);
+                let mut deferred_instrument = shell_without(&metric[instrument], "dataPoints");
+                deferred_instrument["dataPoints"] = Value::Array(dropped_points);
+                deferred_metric[instrument] = deferred_instrument;
+                deferred_scope["metrics"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(deferred_metric);
+            }
+            if !has_points {
                 stats.metrics_dropped += 1;
                 continue;
             }
@@ -133,6 +219,12 @@ fn filter_scope_metrics(
             kept.push(metric);
         }
         *metrics = kept;
+        if !deferred_scope["metrics"].as_array().unwrap().is_empty() {
+            deferred_rm["scopeMetrics"]
+                .as_array_mut()
+                .unwrap()
+                .push(deferred_scope);
+        }
     }
     Ok(())
 }
@@ -142,9 +234,9 @@ fn filter_points(
     metric_name: &str,
     allowlist: &Allowlist,
     stats: &mut FilterStats,
-) -> Result<bool> {
+) -> Result<(bool, Vec<Value>)> {
     let Some(instrument) = instrument_of(metric, metric_name)? else {
-        return Ok(false);
+        return Ok((false, Vec::new()));
     };
     if instrument != "gauge" {
         check_temporality(metric, instrument, metric_name)?;
@@ -153,22 +245,25 @@ fn filter_points(
         .pointer_mut(&format!("/{instrument}/dataPoints"))
         .and_then(Value::as_array_mut)
     else {
-        return Ok(false);
+        return Ok((false, Vec::new()));
     };
     let mut kept = Vec::new();
+    let mut dropped = Vec::new();
     for mut point in points.drain(..) {
         if instrument == "histogram" {
             check_buckets(&point, metric_name)?;
         }
+        let original = point.clone();
         if !retain_point(&mut point, metric_name, allowlist)? {
             stats.points_dropped += 1;
+            dropped.push(original);
             continue;
         }
         kept.push(point);
     }
     let empty = kept.is_empty();
     *points = kept;
-    Ok(!empty)
+    Ok((!empty, dropped))
 }
 
 /// Which of the OTLP instrument fields this metric carries, if any.
@@ -196,8 +291,9 @@ fn instrument_of(metric: &Value, metric_name: &str) -> Result<Option<&'static st
 /// Both are accepted. A cumulative point is safe to replay because a second
 /// observation of the same counter carries the same number; a delta point is
 /// not, and deduplication for those stays with the producer. The ledger
-/// guarantees an artifact is delivered at most once, which is a different
-/// promise. An absent or unspecified temporality is the case worth refusing:
+/// suppresses repeats after recording delivery, but a crash between OTLP
+/// acceptance and that write can still resend. An absent or unspecified
+/// temporality is the case worth refusing:
 /// backends assume one of the two, and the wrong guess silently rescales the
 /// series.
 ///
@@ -310,6 +406,41 @@ fn str_attr(key: &str, value: &str) -> Value {
 mod tests {
     use super::*;
     use crate::allowlist::Allowlist;
+
+    #[test]
+    fn a_wider_allowlist_replays_only_withheld_metrics_and_points() {
+        let narrow = Allowlist::parse(
+            "metrics: [ci.job.duration]\nattributes: [branch_class]\nattribute_values:\n  branch_class: [main]\n",
+        ).unwrap();
+        let wide = Allowlist::parse(
+            "metrics: [ci.job.duration, ci.probe.ms_per_row]\nattributes: [branch_class]\nattribute_values:\n  branch_class: [main, dev]\n",
+        ).unwrap();
+        let body = json!({"resourceMetrics": [{"scopeMetrics": [{"metrics": [
+            {"name": "ci.job.duration", "gauge": {"dataPoints": [
+                {"asDouble": 1.0, "attributes": [{"key": "branch_class", "value": {"stringValue": "main"}}]},
+                {"asDouble": 2.0, "attributes": [{"key": "branch_class", "value": {"stringValue": "dev"}}]}
+            ]}},
+            {"name": "ci.probe.ms_per_row", "gauge": {"dataPoints": [{"asDouble": 3.0}]}}
+        ]}]}]});
+        let first = partition(&serde_json::to_vec(&body).unwrap(), &narrow, &envelope()).unwrap();
+        assert_eq!(first.stats.metrics_kept, 1);
+        assert_eq!(first.stats.points_dropped, 1);
+        let first_body: Value = serde_json::from_slice(first.accepted.as_ref().unwrap()).unwrap();
+        let first_points = &first_body["resourceMetrics"][0]["scopeMetrics"][0]["metrics"][0]["gauge"]
+            ["dataPoints"];
+        assert_eq!(first_points.as_array().unwrap().len(), 1);
+        assert_eq!(first_points[0]["asDouble"], 1.0);
+
+        let replay = partition(first.deferred.as_ref().unwrap(), &wide, &envelope()).unwrap();
+        assert!(replay.deferred.is_none());
+        let replay_body: Value = serde_json::from_slice(replay.accepted.as_ref().unwrap()).unwrap();
+        let replay_metrics = replay_body["resourceMetrics"][0]["scopeMetrics"][0]["metrics"]
+            .as_array()
+            .unwrap();
+        assert_eq!(replay_metrics.len(), 2);
+        assert_eq!(replay_metrics[0]["gauge"]["dataPoints"][0]["asDouble"], 2.0);
+        assert_eq!(replay_metrics[1]["name"], "ci.probe.ms_per_row");
+    }
 
     fn list() -> Allowlist {
         Allowlist::parse(

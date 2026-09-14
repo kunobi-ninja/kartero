@@ -15,6 +15,13 @@ The artifact boundary keeps OTLP credentials out of GitHub Actions. A producer
 cannot claim a repository or pipeline identity: the collector strips whatever
 arrived and stamps its own from the trusted GitHub run.
 
+The collector lists only the configured trusted branch. It checks artifacts
+on recently completed runs every pass, then revisits older runs every six
+hours. A failed artifact scan is retried on the next pass. This reduces GitHub
+requests while still finding late uploads; an artifact uploaded to an older
+run may wait up to six hours. Metrics withheld by the allowlist are kept in
+SQLite and replayed from there when the rules change.
+
 Metric and attribute names are constrained rather than fixed. The allowlist
 admits them individually or by family pattern, so within a family the
 allowlist already trusts, a producer can open a name nobody approved

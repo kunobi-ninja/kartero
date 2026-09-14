@@ -37,20 +37,30 @@ observation instead.
 ## Replay and delta counters
 
 The ledger key includes repository, workflow run, attempt, artifact ID, digest,
-and schema version. Delivered and rejected artifacts are terminal. Temporary
-GitHub or OTLP transport failures remain eligible for retry.
+and schema version. A recorded delivery is not sent again. Temporary GitHub or
+OTLP transport failures remain eligible for retry. Metrics or points withheld
+by the allowlist are retained separately and retried when its rules change;
+already accepted points are not included in that replay.
+The retained payloads live in the SQLite ledger for up to 30 days. The
+collector removes older pending payloads and counts them in
+`kartero_pending_expired_total`; `kartero_pending_metrics_bytes` shows the
+space they occupy.
 
-That guarantees one artifact is delivered at most once. It does not guarantee
-that two different artifacts describe disjoint windows, and nothing downstream
-can tell that they do not.
+An [OTLP partial-success response](https://opentelemetry.io/docs/specs/otlp/)
+may reject points while returning HTTP 200. Kartero counts those rejections
+and records the request as terminal. Retrying the full request would resend
+the points the backend did accept.
 
-Cumulative points are safe under that gap: a second observation of the same
-counter carries the same number, so an overlap is harmless. Delta points are
-not — the backend adds them, and an overlapping window inflates the count with
-no signal that it happened. A producer emitting delta owns its own record of
-what it has already emitted. Kartero cannot do it on the producer's behalf,
-because it sees an opaque artifact rather than the window that artifact
-describes.
+There is a crash window between an OTLP backend accepting a request and SQLite
+recording it. A restart in that window can resend the request. Two different
+artifacts can also describe overlapping windows, and Kartero cannot detect
+that from an opaque payload.
+
+Cumulative points are safer under these gaps: a second observation of the same
+counter carries the same number. Delta points can be counted twice after a
+crash or an overlapping producer window. A producer emitting delta owns its
+record of emitted windows. For strict deduplication across the POST/ledger
+crash window, the backend must also support idempotent ingestion.
 
 Use `kartero validate --input telemetry` to check an unpacked artifact before
 uploading it.

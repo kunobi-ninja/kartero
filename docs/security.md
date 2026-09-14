@@ -46,5 +46,9 @@ checks its reach.
 Provide the token through a Kubernetes Secret owned by your secret controller.
 Do not place token values in Helm values, Git, GitHub Actions artifacts, or logs.
 
+The ledger PVC can hold metric names, attributes, and values withheld by the
+allowlist for up to 30 days. Give it the same access controls as CI artifacts;
+the collector does not write GitHub tokens into it.
+
 Report vulnerabilities privately through GitHub's security advisory interface
 for `kunobi-ninja/kartero`.

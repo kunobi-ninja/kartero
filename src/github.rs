@@ -207,11 +207,13 @@ impl GitHub {
         let since = utc_date_days_ago(lookback);
         for workflow in &self.config.workflows {
             for page in 1..=MAX_RUN_PAGES {
-                let url = format!(
+                let mut url = reqwest::Url::parse(&format!(
                     "https://api.github.com/repos/{}/{}/actions/workflows/{workflow}/runs\
                      ?status=completed&per_page=100&page={page}&created=%3E%3D{since}",
                     self.config.owner, self.config.repo
-                );
+                ))?;
+                url.query_pairs_mut()
+                    .append_pair("branch", &self.config.trusted_branch);
                 let response = self.client.get(url).send().await?;
                 self.record_token_expiry(response.headers());
                 if let Some(failure) =
@@ -422,6 +424,10 @@ impl GitHub {
             "https://github.com/{}/{}",
             self.config.owner, self.config.repo
         )
+    }
+
+    pub fn source_slug(&self) -> String {
+        self.config.slug()
     }
 }
 
