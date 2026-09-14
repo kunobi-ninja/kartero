@@ -2,7 +2,7 @@ use crate::allowlist::Allowlist;
 use crate::artifact::{self, MAX_ZIP_BYTES};
 use crate::config::{Config, SourceConfig};
 use crate::github::{self, ArtifactRef, GitHub, WorkflowRun};
-use crate::ledger::{DeliveryKey, DeliveryStatus, Ledger};
+use crate::ledger::{DeliveryKey, DeliveryStatus, Ledger, PendingMetrics};
 use crate::metrics::Metrics;
 use crate::otlp::{self, Envelope};
 use crate::self_telemetry::{self, CollectSnapshot, SourceStatus};
@@ -18,6 +18,7 @@ pub async fn collect_once(config: &Config) -> Result<()> {
         ..CollectSnapshot::default()
     };
     let result = collect_inner(config, &mut snapshot).await;
+    snapshot.source_last_delivery = Metrics::global().last_deliveries();
     snapshot.ok = result.is_ok();
     snapshot.duration_s = started.elapsed().as_secs_f64();
     Metrics::global().observe_collect(&snapshot);
@@ -45,6 +46,12 @@ async fn collect_inner(config: &Config, snapshot: &mut CollectSnapshot) -> Resul
     let allowlist = Allowlist::load(&config.allowlist_path)?;
     let ledger = Ledger::open(&config.ledger_path)?;
     let metrics = Metrics::global();
+    let expired = ledger.prune_pending()?;
+    ledger.prune_artifact_scans()?;
+    if expired > 0 {
+        metrics.add_pending_expired(expired as u64);
+        warn!(expired, "withheld metrics passed the 30-day replay horizon");
+    }
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_secs(10))
@@ -70,6 +77,16 @@ async fn collect_inner(config: &Config, snapshot: &mut CollectSnapshot) -> Resul
             warn!(source = %slug, error = %err, "collecting source failed");
             failed.push(slug);
         }
+    }
+    let (pending_count, pending_bytes) = ledger.pending_stats()?;
+    metrics.set_pending(pending_count, pending_bytes);
+    snapshot.pending_count = pending_count as u64;
+    snapshot.pending_bytes = pending_bytes as u64;
+    if pending_bytes > 512 * 1024 * 1024 {
+        warn!(
+            pending_bytes,
+            "withheld metric payloads occupy over 512 MiB of the ledger PVC"
+        );
     }
     if !failed.is_empty() {
         bail!("collection failed for {}", failed.join(", "));
@@ -121,11 +138,26 @@ async fn collect_source(
     };
     snapshot.runs_seen += runs.len() as u64;
     let mut had_errors = false;
+    if let Err(err) =
+        replay_pending(config, source, allowlist, ledger, client, metrics, snapshot).await
+    {
+        warn!(source = %source.slug(), error = %err, "replaying allowlist-held metrics failed");
+        had_errors = true;
+    }
     for run in &runs {
         if !github.trusted(run) {
             continue;
         }
         snapshot.runs_trusted += 1;
+        if !ledger.should_scan_artifacts(
+            "collect",
+            run.repo_id,
+            run.run_id,
+            run.attempt,
+            run.observed_at,
+        )? {
+            continue;
+        }
         let artifacts = match github.list_artifacts(run.run_id).await {
             Ok(list) => list,
             Err(err) => {
@@ -136,6 +168,7 @@ async fn collect_source(
             }
         };
         snapshot.artifacts_seen += artifacts.len() as u64;
+        let mut run_had_errors = false;
         for artifact in artifacts {
             if !github::artifact_name_matches(&artifact.name, &config.artifact_prefix) {
                 continue;
@@ -156,7 +189,11 @@ async fn collect_source(
                 record_artifact(metrics, snapshot, "retryable");
                 snapshot.ingest_errors += 1;
                 had_errors = true;
+                run_had_errors = true;
             }
+        }
+        if !run_had_errors {
+            ledger.mark_artifacts_scanned("collect", run.repo_id, run.run_id, run.attempt)?;
         }
     }
     if let Some(actions) = source.actions.as_ref()
@@ -275,49 +312,215 @@ async fn derive_actions(
                     repository_url: github.repository_url(),
                 };
                 let raw = serde_json::to_vec(&body)?;
-                match otlp::prepare(&raw, allowlist, &envelope) {
-                    Ok((filtered, stats)) => {
-                        deliver_derived(config, client, &filtered).await?;
-                        metrics.add_dropped("metric", stats.metrics_dropped);
-                        metrics.add_dropped("point", stats.points_dropped);
-                        metrics.add_kept(stats.metrics_kept);
-                        snapshot.metrics_dropped += stats.metrics_dropped;
-                        snapshot.points_dropped += stats.points_dropped;
-                        snapshot.metrics_kept += stats.metrics_kept;
-                    }
-                    Err(err) => {
-                        warn!(
-                            source = %source.slug(),
-                            run_id = run.run_id,
-                            error = %err,
-                            "derived payload rejected by the allowlist"
-                        );
-                    }
+                let partition = otlp::partition(&raw, allowlist, &envelope).with_context(|| {
+                    format!(
+                        "derived payload for {} run {} attempt {}",
+                        source.slug(),
+                        run.run_id,
+                        attempt
+                    )
+                })?;
+                if let Some(ref filtered) = partition.accepted {
+                    deliver_derived(config, client, filtered, &source.slug(), metrics).await?;
                 }
+                record_filter_stats(metrics, snapshot, &partition.stats);
+                let pending = partition.deferred.map(|payload| {
+                    PendingMetrics::derived(
+                        run.repo_id,
+                        run.run_id,
+                        attempt,
+                        source.slug(),
+                        envelope.pipeline_name,
+                        envelope.repository_url,
+                        payload,
+                    )
+                });
+                ledger.seal_attempt_with_pending(
+                    run.repo_id,
+                    run.run_id,
+                    attempt,
+                    pending.as_ref(),
+                    &allowlist.fingerprint(),
+                )?;
+            } else {
+                ledger.seal_attempt(run.repo_id, run.run_id, attempt)?;
             }
-            ledger.seal_attempt(run.repo_id, run.run_id, attempt)?;
             snapshot.attempts_derived += 1;
         }
     }
     Ok(())
 }
 
-async fn deliver_derived(config: &Config, client: &reqwest::Client, body: &[u8]) -> Result<()> {
+async fn deliver_derived(
+    config: &Config,
+    client: &reqwest::Client,
+    body: &[u8],
+    source: &str,
+    metrics: &Metrics,
+) -> Result<()> {
+    let status = post_metrics(config, client, body, source, metrics).await?;
+    if !status.is_success() {
+        bail!("OTLP backend rejected derived metrics with {status}");
+    }
+    Ok(())
+}
+
+fn record_filter_stats(
+    metrics: &Metrics,
+    snapshot: &mut CollectSnapshot,
+    stats: &otlp::FilterStats,
+) {
+    metrics.add_dropped("metric", stats.metrics_dropped);
+    metrics.add_dropped("point", stats.points_dropped);
+    metrics.add_kept(stats.metrics_kept);
+    snapshot.metrics_dropped += stats.metrics_dropped;
+    snapshot.points_dropped += stats.points_dropped;
+    snapshot.metrics_kept += stats.metrics_kept;
+}
+
+async fn replay_pending(
+    config: &Config,
+    source: &SourceConfig,
+    allowlist: &Allowlist,
+    ledger: &Ledger,
+    client: &reqwest::Client,
+    metrics: &Metrics,
+    snapshot: &mut CollectSnapshot,
+) -> Result<()> {
+    let fingerprint = allowlist.fingerprint();
+    // Fetch one payload at a time: a filtered artifact can be 16 MiB, and the
+    // collector container must never hold a hundred such blobs in memory.
+    for _ in 0..100 {
+        let Some(pending) = ledger
+            .pending_for_source(&source.slug(), &fingerprint)?
+            .into_iter()
+            .next()
+        else {
+            break;
+        };
+        let envelope = Envelope {
+            pipeline_name: pending.pipeline_name.clone(),
+            repository_url: pending.repository_url.clone(),
+        };
+        let partition = otlp::partition(&pending.payload, allowlist, &envelope)
+            .with_context(|| format!("replaying {} run {}", pending.source, pending.run_id))?;
+        if let Some(ref body) = partition.accepted {
+            let status = post_metrics(config, client, body, &pending.source, metrics).await?;
+            if !status.is_success() {
+                bail!("OTLP backend rejected replayed metrics with {status}");
+            }
+        }
+        record_filter_stats(metrics, snapshot, &partition.stats);
+        ledger.advance_pending(&pending, partition.deferred.as_deref(), &fingerprint)?;
+    }
+    Ok(())
+}
+
+/// A successful OTLP HTTP response can still reject some points. OTLP says a
+/// partial success must not be retried as a whole, because accepted delta
+/// points would be counted twice.
+async fn post_metrics(
+    config: &Config,
+    client: &reqwest::Client,
+    body: &[u8],
+    source: &str,
+    metrics: &Metrics,
+) -> Result<StatusCode> {
     let url = format!("{}/v1/metrics", config.otlp_endpoint.trim_end_matches('/'));
-    let response = client
+    let mut response = client
         .post(url)
         .header(reqwest::header::CONTENT_TYPE, "application/json")
         .body(body.to_vec())
         .send()
         .await
-        .context("posting derived CI metrics")?;
-    if !response.status().is_success() {
-        bail!(
-            "OTLP backend rejected derived metrics with {}",
-            response.status()
-        );
+        .context("posting OTLP metrics")?;
+    let status = response.status();
+    if !status.is_success() {
+        return Ok(status);
     }
-    Ok(())
+    const MAX_RESPONSE_BYTES: usize = 64 * 1024;
+    let mut receipt = Vec::new();
+    loop {
+        match response.chunk().await {
+            Ok(Some(chunk)) if receipt.len().saturating_add(chunk.len()) <= MAX_RESPONSE_BYTES => {
+                receipt.extend_from_slice(&chunk);
+            }
+            Ok(None) => break,
+            Ok(Some(_)) => {
+                metrics.inc_otlp_response_issue(source);
+                warn!(
+                    source,
+                    "OTLP success response exceeds 64 KiB; acceptance is unconfirmed"
+                );
+                return Ok(status);
+            }
+            Err(err) => {
+                metrics.inc_otlp_response_issue(source);
+                warn!(source, error = %err, "could not read OTLP success response; acceptance is unconfirmed");
+                return Ok(status);
+            }
+        }
+    }
+    if receipt.is_empty() {
+        metrics.inc_otlp_response_issue(source);
+        warn!(
+            source,
+            "OTLP success response has no body; acceptance is unconfirmed"
+        );
+        return Ok(status);
+    }
+    let partial = match parse_otlp_partial(&receipt) {
+        Ok(value) => value,
+        Err(err) => {
+            metrics.inc_otlp_response_issue(source);
+            warn!(source, error = %err, "invalid OTLP success response; acceptance is unconfirmed");
+            return Ok(status);
+        }
+    };
+    if let Some((rejected, message)) = partial {
+        if rejected > 0 {
+            metrics.add_otlp_rejected(source, rejected);
+            warn!(
+                source,
+                rejected, message, "OTLP backend rejected data points"
+            );
+            return Ok(status);
+        }
+        if !message.is_empty() {
+            warn!(source, message, "OTLP backend returned a warning");
+        }
+    }
+    metrics.record_delivered_families(source, body);
+    Ok(status)
+}
+
+fn parse_otlp_partial(receipt: &[u8]) -> Result<Option<(u64, String)>> {
+    let value: serde_json::Value = serde_json::from_slice(receipt)?;
+    if !value.is_object() {
+        bail!("OTLP success response is not an object");
+    }
+    let Some(partial) = value
+        .get("partialSuccess")
+        .or_else(|| value.get("partial_success"))
+    else {
+        return Ok(None);
+    };
+    let rejected = match partial
+        .get("rejectedDataPoints")
+        .or_else(|| partial.get("rejected_data_points"))
+    {
+        None => 0,
+        Some(serde_json::Value::Number(value)) => value.as_u64().context("rejectedDataPoints")?,
+        Some(serde_json::Value::String(value)) => value.parse().context("rejectedDataPoints")?,
+        _ => bail!("rejectedDataPoints is not a nonnegative integer"),
+    };
+    let message = partial
+        .get("errorMessage")
+        .or_else(|| partial.get("error_message"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    Ok(Some((rejected, message)))
 }
 
 /// Absent means the token does not expire, which is a real answer rather than
@@ -415,48 +618,48 @@ async fn ingest_one(
         pipeline_name: run.workflow_name.clone(),
         repository_url: github.repository_url(),
     };
-    let (body, stats) = match otlp::prepare(&payload.metrics_json, allowlist, &envelope) {
+    let partition = match otlp::partition(&payload.metrics_json, allowlist, &envelope) {
         Ok(prepared) => prepared,
         Err(err) => {
-            // Recorded against the allowlist that emptied it, not sealed for
-            // good. Every other refusal here is a property of the artifact and
-            // will not change -- an unsupported schema stays unsupported. This one
-            // is a property of the allowlist, and widening the allowlist is
-            // exactly the event that makes it wrong.
-            warn!(
-                artifact = %artifact.name,
-                allowlist = %allowlist_fingerprint,
-                error = %err,
-                "payload emptied by the allowlist; will be re-read if the allowlist changes"
-            );
-            ledger.record_against(&key, DeliveryStatus::Filtered, Some(allowlist_fingerprint))?;
+            warn!(artifact = %artifact.name, error = %err, "artifact payload rejected");
+            ledger.record(&key, DeliveryStatus::Skipped)?;
             record_artifact(metrics, snapshot, "skipped");
             return Ok(());
         }
     };
-    metrics.add_dropped("metric", stats.metrics_dropped);
-    metrics.add_dropped("point", stats.points_dropped);
-    metrics.add_kept(stats.metrics_kept);
-    snapshot.metrics_dropped += stats.metrics_dropped;
-    snapshot.points_dropped += stats.points_dropped;
-    snapshot.metrics_kept += stats.metrics_kept;
-
-    let url = format!("{}/v1/metrics", config.otlp_endpoint.trim_end_matches('/'));
-    let response = client
-        .post(url)
-        .header(reqwest::header::CONTENT_TYPE, "application/json")
-        .body(body)
-        .send()
-        .await
-        .context("posting OTLP metrics")?;
-    let status = response.status();
+    record_filter_stats(metrics, snapshot, &partition.stats);
+    let pending = partition.deferred.map(|payload| {
+        PendingMetrics::artifact(
+            &key,
+            github.source_slug(),
+            envelope.pipeline_name,
+            envelope.repository_url,
+            payload,
+        )
+    });
+    let Some(body) = partition.accepted else {
+        ledger.record_with_pending(
+            &key,
+            DeliveryStatus::Filtered,
+            pending.as_ref(),
+            allowlist_fingerprint,
+        )?;
+        record_artifact(metrics, snapshot, "skipped");
+        return Ok(());
+    };
+    let status = post_metrics(config, client, &body, &github.source_slug(), metrics).await?;
     if status.is_success() {
-        ledger.record(&key, DeliveryStatus::Delivered)?;
+        ledger.record_with_pending(
+            &key,
+            DeliveryStatus::Delivered,
+            pending.as_ref(),
+            allowlist_fingerprint,
+        )?;
         record_artifact(metrics, snapshot, "delivered");
         info!(
             run_id = run.run_id,
             artifact = %artifact.name,
-            kept = stats.metrics_kept,
+            kept = partition.stats.metrics_kept,
             "delivered"
         );
         return Ok(());
@@ -563,7 +766,21 @@ async fn resolve_job_names(
 
 #[cfg(test)]
 mod tests {
+    use super::parse_otlp_partial;
     use crate::github::artifact_name_matches;
+
+    #[test]
+    fn otlp_partial_success_reports_rejected_points() {
+        let receipt =
+            br#"{"partialSuccess":{"rejectedDataPoints":"3","errorMessage":"bad labels"}}"#;
+        assert_eq!(
+            parse_otlp_partial(receipt).unwrap(),
+            Some((3, "bad labels".into()))
+        );
+        assert_eq!(parse_otlp_partial(br#"{}"#).unwrap(), None);
+        assert!(parse_otlp_partial(br#"[]"#).is_err());
+        assert!(parse_otlp_partial(br#"{"partialSuccess":{"rejectedDataPoints":-1}}"#).is_err());
+    }
 
     #[test]
     fn artifact_prefix_does_not_match_the_next_major_version() {

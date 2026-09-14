@@ -1,9 +1,10 @@
-use crate::self_telemetry::{ArchiveSnapshot, CollectSnapshot};
+use crate::self_telemetry::{ArchiveSnapshot, CollectSnapshot, SourceDelivery};
 use prometheus::{
     Encoder, Histogram, IntCounterVec, IntGauge, IntGaugeVec, Registry, TextEncoder,
     histogram_opts, opts,
 };
-use std::sync::OnceLock;
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::{Mutex, OnceLock};
 
 pub struct Metrics {
     registry: Registry,
@@ -21,6 +22,13 @@ pub struct Metrics {
     source_listing_failures: IntCounterVec,
     anomalies: IntCounterVec,
     source_token_expires: IntGaugeVec,
+    source_last_delivery: IntGaugeVec,
+    delivery_times: Mutex<BTreeMap<(String, String), u64>>,
+    otlp_rejected_points: IntCounterVec,
+    otlp_response_issues: IntCounterVec,
+    pending_count: IntGauge,
+    pending_bytes: IntGauge,
+    pending_expired: IntCounterVec,
     archive_artifacts: IntCounterVec,
     archive_passes: IntCounterVec,
     archive_duration: Histogram,
@@ -147,6 +155,60 @@ impl Metrics {
             &["source"],
         )
         .expect("token expiry gauge");
+        let source_last_delivery = IntGaugeVec::new(
+            opts!(
+                "kartero_source_last_delivery_timestamp_seconds",
+                "Last fully accepted OTLP metric delivery by source and bounded family."
+            ),
+            &["source", "family"],
+        )
+        .expect("last delivery gauge");
+        let otlp_rejected_points = IntCounterVec::new(
+            opts!(
+                "kartero_otlp_rejected_points_total",
+                "Data points rejected in OTLP partial-success responses."
+            ),
+            &["source"],
+        )
+        .expect("OTLP rejected points counter");
+        let otlp_response_issues = IntCounterVec::new(
+            opts!(
+                "kartero_otlp_response_issues_total",
+                "Successful OTLP responses whose acceptance could not be confirmed."
+            ),
+            &["source"],
+        )
+        .expect("OTLP response issues counter");
+        let pending_count = IntGauge::new(
+            "kartero_pending_metrics",
+            "Metric payloads withheld by the allowlist and awaiting a rule change.",
+        )
+        .expect("pending count gauge");
+        let pending_bytes = IntGauge::new(
+            "kartero_pending_metrics_bytes",
+            "Bytes of withheld OTLP payloads stored in SQLite.",
+        )
+        .expect("pending bytes gauge");
+        let pending_expired = IntCounterVec::new(
+            opts!(
+                "kartero_pending_expired_total",
+                "Withheld payloads removed after the 30-day replay horizon."
+            ),
+            &["reason"],
+        )
+        .expect("pending expired counter");
+        for collector in [
+            Box::new(source_last_delivery.clone()) as Box<dyn prometheus::core::Collector>,
+            Box::new(otlp_rejected_points.clone()),
+            Box::new(otlp_response_issues.clone()),
+            Box::new(pending_count.clone()),
+            Box::new(pending_bytes.clone()),
+            Box::new(pending_expired.clone()),
+        ] {
+            registry
+                .register(collector)
+                .expect("register OTLP delivery metric");
+        }
         registry
             .register(Box::new(source_token_expires.clone()))
             .expect("register token expiry");
@@ -275,6 +337,13 @@ impl Metrics {
             source_listing_failures,
             anomalies,
             source_token_expires,
+            source_last_delivery,
+            delivery_times: Mutex::new(BTreeMap::new()),
+            otlp_rejected_points,
+            otlp_response_issues,
+            pending_count,
+            pending_bytes,
+            pending_expired,
             archive_artifacts,
             archive_passes,
             archive_duration,
@@ -305,6 +374,86 @@ impl Metrics {
 
     pub fn inc_anomaly(&self, source: &str, kind: &str) {
         self.anomalies.with_label_values(&[source, kind]).inc();
+    }
+
+    pub fn add_otlp_rejected(&self, source: &str, rejected: u64) {
+        self.otlp_rejected_points
+            .with_label_values(&[source])
+            .inc_by(rejected);
+    }
+
+    pub fn inc_otlp_response_issue(&self, source: &str) {
+        self.otlp_response_issues.with_label_values(&[source]).inc();
+    }
+
+    pub fn record_delivered_families(&self, source: &str, body: &[u8]) {
+        let Ok(value) = serde_json::from_slice::<serde_json::Value>(body) else {
+            return;
+        };
+        let mut families = BTreeSet::new();
+        if let Some(resources) = value
+            .get("resourceMetrics")
+            .and_then(serde_json::Value::as_array)
+        {
+            for resource in resources {
+                if let Some(scopes) = resource
+                    .get("scopeMetrics")
+                    .and_then(serde_json::Value::as_array)
+                {
+                    for scope in scopes {
+                        if let Some(metrics) =
+                            scope.get("metrics").and_then(serde_json::Value::as_array)
+                        {
+                            for metric in metrics {
+                                if let Some(name) =
+                                    metric.get("name").and_then(serde_json::Value::as_str)
+                                {
+                                    families.insert(metric_family(name));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let mut delivery_times = self
+            .delivery_times
+            .lock()
+            .expect("delivery timestamps mutex");
+        for family in families {
+            self.source_last_delivery
+                .with_label_values(&[source, family])
+                .set(now);
+            delivery_times.insert((source.to_string(), family.to_string()), now as u64);
+        }
+    }
+
+    pub fn last_deliveries(&self) -> Vec<SourceDelivery> {
+        self.delivery_times
+            .lock()
+            .expect("delivery timestamps mutex")
+            .iter()
+            .map(|((slug, family), unix_seconds)| SourceDelivery {
+                slug: slug.clone(),
+                family: family.clone(),
+                unix_seconds: *unix_seconds,
+            })
+            .collect()
+    }
+
+    pub fn set_pending(&self, count: i64, bytes: i64) {
+        self.pending_count.set(count);
+        self.pending_bytes.set(bytes);
+    }
+
+    pub fn add_pending_expired(&self, count: u64) {
+        self.pending_expired
+            .with_label_values(&["age"])
+            .inc_by(count);
     }
 
     pub fn inc_artifact(&self, outcome: &str) {
@@ -373,5 +522,34 @@ impl Metrics {
             .encode(&self.registry.gather(), &mut buf)
             .expect("encode prometheus");
         String::from_utf8(buf).expect("prometheus text is utf-8")
+    }
+}
+
+/// Keep Prometheus labels bounded even when a producer adds metric names.
+fn metric_family(name: &str) -> &'static str {
+    let mut parts = name.split('.');
+    match (parts.next(), parts.next()) {
+        (Some("ci"), Some("run")) => "ci.run",
+        (Some("ci"), Some("job")) => "ci.job",
+        (Some("ci"), Some("coverage")) => "ci.coverage",
+        (Some("ci"), Some("collector")) => "ci.collector",
+        (Some("ci"), Some("probe")) => "ci.probe",
+        (Some("kache"), Some("bench")) => "kache.bench",
+        (Some("kache"), Some("cache")) => "kache.cache",
+        (Some("kache"), Some("prefetch")) => "kache.prefetch",
+        (Some("kache"), Some("ci")) => "kache.ci",
+        _ => "other",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::metric_family;
+
+    #[test]
+    fn delivery_family_labels_are_bounded() {
+        assert_eq!(metric_family("ci.probe.ms_per_row"), "ci.probe");
+        assert_eq!(metric_family("kache.bench.speedup"), "kache.bench");
+        assert_eq!(metric_family("vendor.unique.customer_id"), "other");
     }
 }

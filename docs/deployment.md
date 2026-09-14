@@ -3,9 +3,9 @@
 The chart is published as an OCI artifact:
 
 ```bash
-helm show values oci://registry-1.docker.io/zondax/kartero --version 0.4.5
+helm show values oci://registry-1.docker.io/zondax/kartero --version 0.4.12
 helm install kartero oci://registry-1.docker.io/zondax/kartero \
-  --version 0.4.5 --namespace signoz
+  --version 0.4.12 --namespace signoz
 ```
 
 Set at least the GitHub owner, repository, workflows, existing Secret, OTLP
@@ -129,6 +129,27 @@ configured source on every pass, so a source that starts failing moves rather
 than stopping, and a series that stops being written means the scrape stopped
 rather than the source recovering.
 
+For a family expected daily, alert on stale delivery as well as source health:
+
+```promql
+time() - kartero_source_last_delivery_timestamp_seconds{source="owner/repo",family="ci.probe"} > 26 * 3600
+```
+
+Also alert when that series is absent after onboarding. `source_up` only proves
+that GitHub runs were listed; it cannot prove a producer uploaded an artifact
+or that the allowlist admitted its metrics. `kartero_otlp_rejected_points_total`
+counts points rejected in an OTLP partial-success response, and
+`kartero_otlp_response_issues_total` counts success responses whose body could
+not be checked. Neither causes a full-body retry, which could duplicate
+accepted delta points.
+
+In the OTLP backend, the freshness gauge is
+`kartero.collect.source_last_delivery`, with `kartero.source` and
+`kartero.metric.family` attributes. It carries the same Unix timestamp, so a
+missing or old `ci.probe` series is visible in SigNoz without Prometheus
+scraping. `kartero.collect.pending_metrics_bytes` shows the retained replay
+backlog there.
+
 `kartero_source_listing_failures_total{source, kind}` says which kind of
 failure. Three kinds will not resolve on their own, and all are logged at
 ERROR naming the source; ordinary transport failures stay at WARN.
@@ -181,8 +202,9 @@ There is nothing to cron and no extra command to invoke in the cluster. The
 prefix for kache benches is `bench` (`bench-firefox`, not `telemetry-otlp-v1-*`).
 
 Files land at `{path}/{owner}/{repo}/{run_id}/{attempt}/{artifact}.zip`. Give
-the archive PVC enough space for the nights you want to keep; Kartero does not
-prune it.
+the archive PVC enough space for the nights you want to keep. The chart prunes
+files after 30 days by default; set `archive.retentionDays` to another positive
+number to change that horizon.
 
 ```yaml
 archive:
