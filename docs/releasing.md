@@ -7,11 +7,11 @@ One `vX.Y.Z` tag publishes the matching version of:
 - `oci://registry-1.docker.io/zondax/kartero:X.Y.Z` as a Helm chart
 - a GitHub release with the packaged chart
 
-Update `Cargo.toml`, `packages/cli/package.json`, and
-`charts/kartero/Chart.yaml` together. Run:
+Update the Cargo manifest and lockfile, npm manifest and lockfile, chart, and
+version-pinned examples together. Run:
 
 ```bash
-./scripts/check-version-consistency.sh v0.4.12
+./scripts/check-version-consistency.sh v0.4.13
 ```
 
 The release workflow accepts tags whose commit is reachable from `main`. It
