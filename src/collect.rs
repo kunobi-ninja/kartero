@@ -105,7 +105,7 @@ async fn collect_source(
     snapshot: &mut CollectSnapshot,
 ) -> Result<()> {
     let github = GitHub::new(source.clone())?;
-    let listed = github.list_completed_runs(config.lookback).await;
+    let listed = github.list_recent_runs(config.lookback).await;
     // Recorded whatever the outcome: GitHub reports the expiry on every
     // response that carries the token, and knowing a token is days from
     // lapsing is most useful while it still works.
@@ -131,7 +131,7 @@ async fn collect_source(
                 );
             } else {
                 metrics.inc_source_listing_failure(&source.slug(), "other");
-                warn!(source = %source.slug(), error = %err, "listing completed GitHub workflow runs failed");
+                warn!(source = %source.slug(), error = %err, "listing GitHub workflow runs failed");
             }
             return Err(err);
         }
@@ -154,7 +154,7 @@ async fn collect_source(
             run.repo_id,
             run.run_id,
             run.attempt,
-            run.observed_at,
+            run.artifact_scan_stamp(),
         )? {
             continue;
         }
@@ -196,9 +196,17 @@ async fn collect_source(
             ledger.mark_artifacts_scanned("collect", run.repo_id, run.run_id, run.attempt)?;
         }
     }
+    // Only a finished attempt has a conclusion and a last job. Handing the
+    // rest to the derivation would cost a jobs request per pass and come back
+    // with nothing but a `RunNotCompleted` anomaly.
+    let completed: Vec<WorkflowRun> = runs
+        .iter()
+        .filter(|run| run.is_completed())
+        .cloned()
+        .collect();
     if let Some(actions) = source.actions.as_ref()
         && let Err(err) = derive_actions(
-            config, source, actions, allowlist, &runs, ledger, &github, client, snapshot,
+            config, source, actions, allowlist, &completed, ledger, &github, client, snapshot,
         )
         .await
     {

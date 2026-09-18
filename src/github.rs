@@ -39,6 +39,33 @@ pub struct WorkflowRun {
     pub conclusion: Option<String>,
 }
 
+impl WorkflowRun {
+    /// Whether GitHub considers this attempt finished.
+    ///
+    /// Only a finished attempt has a conclusion and a last job, so only a
+    /// finished attempt can be derived into run and job metrics. Its
+    /// artifacts, though, are readable as soon as the job that made them
+    /// uploads one.
+    pub fn is_completed(&self) -> bool {
+        self.detail.status == "completed"
+    }
+
+    /// The instant the artifact-scan cache may age from, or zero to force a
+    /// scan on every pass.
+    ///
+    /// A run still executing has no such instant: the next job to finish can
+    /// add an artifact at any moment, and `updated_at` does not move while a
+    /// long job runs, so treating it as a completion time would let a five-hour
+    /// Windows job go unscanned for six.
+    pub fn artifact_scan_stamp(&self) -> f64 {
+        if self.is_completed() {
+            self.observed_at
+        } else {
+            0.0
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ArtifactRef {
     pub id: i64,
@@ -194,7 +221,7 @@ impl GitHub {
         is_trusted(&run.event, &run.head_branch, &self.config.trusted_branch)
     }
 
-    /// Completed runs of every configured workflow, back to `lookback`.
+    /// Runs of every configured workflow, back to `lookback`, finished or not.
     ///
     /// Paged and date-bounded rather than "the most recent 30". Thirty runs is
     /// a window whose width depends on how busy the repository is: it covers
@@ -202,18 +229,26 @@ impl GitHub {
     /// burst of pushes, so it silently narrows exactly when there is most to
     /// collect. `created` bounds the window in time instead, which is the unit
     /// the collect interval is expressed in.
-    pub async fn list_completed_runs(&self, lookback: Duration) -> Result<Vec<WorkflowRun>> {
+    ///
+    /// Runs still executing are included because an artifact is downloadable
+    /// as soon as its job uploads it. Waiting for the whole run held every
+    /// benchmark in it behind the slowest: the nightly's Windows Firefox jobs
+    /// take five to six hours, so results that existed by 04:00 did not reach
+    /// the collector until the morning. Callers that need a final conclusion
+    /// filter on [`WorkflowRun::is_completed`].
+    pub async fn list_recent_runs(&self, lookback: Duration) -> Result<Vec<WorkflowRun>> {
         let mut completed = Vec::new();
         let since = utc_date_days_ago(lookback);
         for workflow in &self.config.workflows {
             for page in 1..=MAX_RUN_PAGES {
-                let mut url = reqwest::Url::parse(&format!(
-                    "https://api.github.com/repos/{}/{}/actions/workflows/{workflow}/runs\
-                     ?status=completed&per_page=100&page={page}&created=%3E%3D{since}",
-                    self.config.owner, self.config.repo
-                ))?;
-                url.query_pairs_mut()
-                    .append_pair("branch", &self.config.trusted_branch);
+                let url = runs_query_url(
+                    &self.config.owner,
+                    &self.config.repo,
+                    workflow,
+                    page,
+                    &since,
+                    &self.config.trusted_branch,
+                )?;
                 let response = self.client.get(url).send().await?;
                 self.record_token_expiry(response.headers());
                 if let Some(failure) =
@@ -677,6 +712,109 @@ mod permanent_kind_through_context {
             .context("parsing")
             .unwrap_err();
         assert_eq!(permanent_kind(&err), None);
+    }
+}
+
+/// One page of the run listing for a workflow.
+///
+/// No `status` filter: an artifact is downloadable as soon as its job uploads
+/// it, and filtering here is what made every arm of a run wait for the slowest.
+fn runs_query_url(
+    owner: &str,
+    repo: &str,
+    workflow: &str,
+    page: u32,
+    since: &str,
+    branch: &str,
+) -> Result<reqwest::Url> {
+    let mut url = reqwest::Url::parse(&format!(
+        "https://api.github.com/repos/{owner}/{repo}/actions/workflows/{workflow}/runs\
+         ?per_page=100&page={page}&created=%3E%3D{since}"
+    ))?;
+    url.query_pairs_mut().append_pair("branch", branch);
+    Ok(url)
+}
+
+#[cfg(test)]
+mod in_progress_runs {
+    use super::*;
+
+    fn run(status: &str, observed_at: f64) -> WorkflowRun {
+        WorkflowRun {
+            detail: crate::actions::RunAttempt {
+                id: 34_074_500_942,
+                run_attempt: 1,
+                event: "schedule".into(),
+                status: status.into(),
+                conclusion: None,
+                created_at: "2026-09-07T01:54:18Z".into(),
+                run_started_at: "2026-09-07T01:54:20Z".into(),
+                path: ".github/workflows/bench.yml".into(),
+                head_branch: Some("main".into()),
+                repository: crate::actions::model::Repository {
+                    full_name: "kunobi-ninja/kache".into(),
+                },
+            },
+            observed_at,
+            head_sha: "9f3c1ab".into(),
+            repo_id: 7,
+            run_id: 34_074_500_942,
+            attempt: 1,
+            event: "schedule".into(),
+            head_branch: "main".into(),
+            workflow_id: 297_515_584,
+            workflow_name: "Bench".into(),
+            conclusion: None,
+        }
+    }
+
+    /// The whole point of listing unfinished runs is to read the artifacts the
+    /// jobs that already finished have uploaded.
+    #[test]
+    fn an_unfinished_run_is_rescanned_on_every_pass() {
+        let live = run("in_progress", 1_757_212_800.0);
+        assert!(!live.is_completed());
+        // Zero is the ledger's "do not cache this scan" value. Returning
+        // `updated_at` instead would let a five-hour Windows job, which does
+        // not touch it while it runs, look six hours old and go unscanned.
+        assert_eq!(live.artifact_scan_stamp(), 0.0);
+
+        assert!(!run("queued", 1_757_212_800.0).is_completed());
+        assert_eq!(run("queued", 1_757_212_800.0).artifact_scan_stamp(), 0.0);
+    }
+
+    /// A finished run keeps the cheaper cadence: its artifact list cannot grow.
+    #[test]
+    fn a_finished_run_ages_from_its_own_completion() {
+        let done = run("completed", 1_757_212_800.0);
+        assert!(done.is_completed());
+        assert_eq!(done.artifact_scan_stamp(), 1_757_212_800.0);
+    }
+
+    /// The listing no longer asks GitHub for completed runs only; if it did,
+    /// every arm of a run would again wait for the slowest one.
+    #[test]
+    fn the_listing_query_asks_for_runs_in_every_status() {
+        let url = runs_query_url(
+            "kunobi-ninja",
+            "kache",
+            "bench.yml",
+            2,
+            "2026-09-17",
+            "main",
+        )
+        .expect("the query must build");
+
+        assert!(url.query_pairs().all(|(key, _)| key != "status"), "{url}");
+        let pairs: std::collections::HashMap<_, _> = url.query_pairs().collect();
+        assert_eq!(pairs["per_page"], "100");
+        assert_eq!(pairs["page"], "2");
+        assert_eq!(pairs["created"], ">=2026-09-17");
+        assert_eq!(pairs["branch"], "main");
+        assert_eq!(
+            url.path(),
+            "/repos/kunobi-ninja/kache/actions/workflows/bench.yml/runs"
+        );
     }
 }
 

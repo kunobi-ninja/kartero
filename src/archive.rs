@@ -129,11 +129,11 @@ async fn archive_source(
     snapshot: &mut ArchiveSnapshot,
 ) -> Result<()> {
     let github = GitHub::new(source.clone())?;
-    let runs = match github.list_completed_runs(lookback).await {
+    let runs = match github.list_recent_runs(lookback).await {
         Ok(runs) => runs,
         Err(err) => {
             snapshot.github_errors += 1;
-            warn!(source = %source.slug(), error = %err, "archive: listing completed GitHub workflow runs failed");
+            warn!(source = %source.slug(), error = %err, "archive: listing GitHub workflow runs failed");
             return Err(err);
         }
     };
@@ -149,7 +149,7 @@ async fn archive_source(
             run.repo_id,
             run.run_id,
             run.attempt,
-            run.observed_at,
+            run.artifact_scan_stamp(),
         )? {
             continue;
         }
