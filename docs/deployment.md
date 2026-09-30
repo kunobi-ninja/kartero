@@ -143,6 +143,21 @@ counts points rejected in an OTLP partial-success response, and
 not be checked. Neither causes a full-body retry, which could duplicate
 accepted delta points.
 
+A producer can also upload an artifact Kartero refuses for its contents: one
+over the size bounds, one that will not open, an unknown `schema_version`, a
+payload outside the OTLP structure bounds, or one the backend answers 400 or
+413 to. Nothing in it is delivered, and the producer's job has already passed.
+
+```promql
+increase(kartero_artifacts_total{outcome="rejected"}[24h]) > 0
+```
+
+Alert on that. `outcome="skipped"` cannot stand in for it: it counts every
+artifact a pass had nothing to do for, including each one delivered earlier,
+so it is never zero. The pod log names the artifact and the reason
+(`artifact payload rejected`). In the OTLP backend the same count is
+`kartero.collect.artifacts` with `kartero.artifact.outcome = rejected`.
+
 In the OTLP backend, the freshness gauge is
 `kartero.collect.source_last_delivery`, with `kartero.source` and
 `kartero.metric.family` attributes. It carries the same Unix timestamp, so a

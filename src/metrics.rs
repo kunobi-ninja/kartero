@@ -251,7 +251,7 @@ impl Metrics {
         registry
             .register(Box::new(collect_errors.clone()))
             .expect("register collect errors");
-        for outcome in ["delivered", "skipped", "held", "retryable"] {
+        for outcome in ["delivered", "skipped", "rejected", "held", "retryable"] {
             let _ = artifacts.with_label_values(&[outcome]);
         }
         for kind in ["metric", "point"] {
@@ -544,7 +544,26 @@ fn metric_family(name: &str) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::metric_family;
+    use super::{Metrics, metric_family};
+
+    /// An alert on rejected artifacts needs the series to exist at zero, and
+    /// needs a rejection to move it rather than the skipped count.
+    #[test]
+    fn rejected_artifacts_have_their_own_series() {
+        let metrics = Metrics::new();
+        assert!(
+            metrics
+                .encode()
+                .contains("kartero_artifacts_total{outcome=\"rejected\"} 0")
+        );
+        let mut snapshot = crate::self_telemetry::CollectSnapshot::default();
+        metrics.inc_artifact("rejected");
+        snapshot.inc_artifact("rejected");
+        let encoded = metrics.encode();
+        assert!(encoded.contains("kartero_artifacts_total{outcome=\"rejected\"} 1"));
+        assert!(encoded.contains("kartero_artifacts_total{outcome=\"skipped\"} 0"));
+        assert_eq!((snapshot.rejected, snapshot.skipped), (1, 0));
+    }
 
     #[test]
     fn delivery_family_labels_are_bounded() {

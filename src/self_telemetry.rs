@@ -47,6 +47,9 @@ pub struct CollectSnapshot {
     pub artifacts_matched: u64,
     pub delivered: u64,
     pub skipped: u64,
+    /// Refused for their contents: oversized, unreadable, an unknown schema,
+    /// a payload outside the OTLP bounds, or one the backend answered 400 to.
+    pub rejected: u64,
     pub held: u64,
     pub retryable: u64,
     pub metrics_kept: u64,
@@ -129,6 +132,7 @@ impl CollectSnapshot {
         match outcome {
             "delivered" => self.delivered += 1,
             "skipped" => self.skipped += 1,
+            "rejected" => self.rejected += 1,
             "held" => self.held += 1,
             "retryable" => self.retryable += 1,
             _ => {}
@@ -172,6 +176,7 @@ pub fn serialize(snapshot: &CollectSnapshot) -> Value {
                     gauge("kartero.collect.artifacts", "{artifact}", vec![
                         as_int(snapshot.delivered, &time, &[str_attr("kartero.artifact.outcome", "delivered")]),
                         as_int(snapshot.skipped, &time, &[str_attr("kartero.artifact.outcome", "skipped")]),
+                        as_int(snapshot.rejected, &time, &[str_attr("kartero.artifact.outcome", "rejected")]),
                         as_int(snapshot.held, &time, &[str_attr("kartero.artifact.outcome", "held")]),
                         as_int(snapshot.retryable, &time, &[str_attr("kartero.artifact.outcome", "retryable")]),
                     ]),
@@ -458,6 +463,7 @@ mod tests {
             artifacts_matched: 3,
             delivered: 2,
             skipped: 1,
+            rejected: 5,
             held: 0,
             retryable: 1,
             metrics_kept: 12,
@@ -492,6 +498,29 @@ mod tests {
         assert!(names.contains(&"kartero.collect.source_token_expires"));
         assert!(names.contains(&"kartero.collect.errors"));
         assert!(names.contains(&"kartero.collect.anomalies"));
+        // A refused artifact must not hide among the skipped ones: that count
+        // includes every artifact delivered on an earlier pass.
+        let artifacts = body["resourceMetrics"][0]["scopeMetrics"][0]["metrics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|metric| metric["name"] == "kartero.collect.artifacts")
+            .unwrap();
+        let by_outcome: std::collections::BTreeMap<_, _> = artifacts["gauge"]["dataPoints"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|point| {
+                (
+                    point["attributes"][0]["value"]["stringValue"]
+                        .as_str()
+                        .unwrap(),
+                    point["asInt"].as_str().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(by_outcome["rejected"], "5");
+        assert_eq!(by_outcome["skipped"], "1");
         let dumped = body.to_string();
         assert!(!dumped.contains("cicd."));
         assert!(!dumped.contains("run_id"));

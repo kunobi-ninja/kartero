@@ -546,6 +546,10 @@ fn record_token_expiry(
     snapshot.token_expiry.push((source.slug(), expires));
 }
 
+/// `skipped` is every artifact a pass had nothing to do for, which includes
+/// each one delivered on an earlier pass, so it is never zero. `rejected` is
+/// an artifact refused for what it contains: its producer has to change before
+/// anything it uploads can arrive.
 fn record_artifact(metrics: &Metrics, snapshot: &mut CollectSnapshot, outcome: &str) {
     metrics.inc_artifact(outcome);
     snapshot.inc_artifact(outcome);
@@ -582,7 +586,7 @@ async fn ingest_one(
             "skipping oversized artifact"
         );
         ledger.record(&key_without_version(1), DeliveryStatus::Skipped)?;
-        record_artifact(metrics, snapshot, "skipped");
+        record_artifact(metrics, snapshot, "rejected");
         return Ok(());
     }
     if artifact.expired {
@@ -602,7 +606,7 @@ async fn ingest_one(
         Err(err) => {
             warn!(artifact = %artifact.name, error = %err, "artifact rejected");
             ledger.record(&key_without_version(1), DeliveryStatus::Skipped)?;
-            record_artifact(metrics, snapshot, "skipped");
+            record_artifact(metrics, snapshot, "rejected");
             return Ok(());
         }
     };
@@ -618,7 +622,7 @@ async fn ingest_one(
             "unsupported schema_version"
         );
         ledger.record(&key, DeliveryStatus::Skipped)?;
-        record_artifact(metrics, snapshot, "skipped");
+        record_artifact(metrics, snapshot, "rejected");
         return Ok(());
     }
 
@@ -631,7 +635,7 @@ async fn ingest_one(
         Err(err) => {
             warn!(artifact = %artifact.name, error = %err, "artifact payload rejected");
             ledger.record(&key, DeliveryStatus::Skipped)?;
-            record_artifact(metrics, snapshot, "skipped");
+            record_artifact(metrics, snapshot, "rejected");
             return Ok(());
         }
     };
@@ -685,7 +689,7 @@ async fn ingest_one(
         status,
         StatusCode::BAD_REQUEST | StatusCode::PAYLOAD_TOO_LARGE
     ) {
-        (DeliveryStatus::Skipped, "skipped")
+        (DeliveryStatus::Skipped, "rejected")
     } else {
         (DeliveryStatus::Held, "held")
     };
