@@ -16,10 +16,13 @@ use serde_json::{Value, json};
 // times the size of its source, and this runs in a 128 MiB container. A
 // producer with more than a few thousand points should write several
 // artifacts rather than one large one.
-const MAX_RESOURCE_METRICS: usize = 4;
-const MAX_SCOPES_PER_RESOURCE: usize = 8;
-const MAX_ATTRIBUTES: usize = 32;
-const MAX_BUCKETS_PER_POINT: usize = 64;
+//
+// The CLI's `validate` checks the same bounds, so a producer learns of a
+// refusal in its own job. `fixtures/contract/bounds.json` holds both in step.
+pub const MAX_RESOURCE_METRICS: usize = 4;
+pub const MAX_SCOPES_PER_RESOURCE: usize = 8;
+pub const MAX_ATTRIBUTES: usize = 32;
+pub const MAX_BUCKETS_PER_POINT: usize = 64;
 
 /// OTLP carries a metric's points under exactly one of these keys, and the
 /// shape of a data point depends on which. `exponentialHistogram` and

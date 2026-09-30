@@ -11,6 +11,20 @@ const INSTRUMENTS = ['gauge', 'sum', 'histogram'] as const
 
 type Instrument = (typeof INSTRUMENTS)[number]
 
+/**
+ * The collector's structure bounds. It refuses a whole artifact that crosses
+ * one, after the job that uploaded it has passed, so they are checked here as
+ * well. `fixtures/contract/bounds.json` holds this copy and the collector's in
+ * step.
+ */
+export const BOUNDS = {
+  resourceMetrics: 4,
+  scopesPerResource: 8,
+  attributes: 32,
+  bucketsPerPoint: 64,
+  jsonBytes: 16 * 1024 * 1024,
+} as const
+
 interface OtlpAttribute {
   key?: unknown
 }
@@ -42,6 +56,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function checkAttributes(value: unknown, where: string): void {
   if (value === undefined) return
   if (!Array.isArray(value)) throw new Error(`${where} has a non-array attributes field`)
+  if (value.length > BOUNDS.attributes) {
+    throw new Error(`${where} has ${value.length} attributes; the collector accepts ${BOUNDS.attributes}`)
+  }
   for (const attribute of value as OtlpAttribute[]) {
     const key = isRecord(attribute) ? attribute.key : undefined
     if (typeof key !== 'string' || key === '') throw new Error(`${where} has an attribute without a key`)
@@ -79,6 +96,9 @@ function checkBuckets(point: OtlpPoint, label: string): void {
   if (!Array.isArray(counts) || !Array.isArray(bounds)) {
     throw new Error(`${label} is missing bucketCounts or explicitBounds`)
   }
+  if (counts.length > BOUNDS.bucketsPerPoint) {
+    throw new Error(`${label} has ${counts.length} buckets; the collector accepts ${BOUNDS.bucketsPerPoint}`)
+  }
   if (counts.length !== bounds.length + 1) {
     throw new Error(`${label} has ${counts.length} bucket counts for ${bounds.length} bounds`)
   }
@@ -90,14 +110,27 @@ export async function validateArtifactDirectory(directory: string): Promise<void
     throw new Error(`unsupported schema_version ${JSON.stringify(schema)}`)
   }
 
-  const body = JSON.parse(await readFile(join(directory, 'metrics.otlp.json'), 'utf8')) as OtlpBody
+  const raw = await readFile(join(directory, 'metrics.otlp.json'))
+  if (raw.byteLength > BOUNDS.jsonBytes) {
+    throw new Error(`metrics.otlp.json is ${raw.byteLength} bytes; the collector accepts ${BOUNDS.jsonBytes}`)
+  }
+  const body = JSON.parse(raw.toString('utf8')) as OtlpBody
   if (!Array.isArray(body.resourceMetrics) || body.resourceMetrics.length === 0) {
     throw new Error('metrics.otlp.json has no resourceMetrics')
+  }
+  if (body.resourceMetrics.length > BOUNDS.resourceMetrics) {
+    throw new Error(
+      `metrics.otlp.json has ${body.resourceMetrics.length} resourceMetrics entries; the collector accepts ${BOUNDS.resourceMetrics}. Merge entries that share a resource.`
+    )
   }
 
   let metricCount = 0
   for (const resource of body.resourceMetrics) {
     checkAttributes(resource.resource?.attributes, 'resource')
+    const scopes = resource.scopeMetrics ?? []
+    if (scopes.length > BOUNDS.scopesPerResource) {
+      throw new Error(`a resource has ${scopes.length} scopeMetrics entries; the collector accepts ${BOUNDS.scopesPerResource}`)
+    }
     for (const scope of resource.scopeMetrics ?? []) {
       if (!Array.isArray(scope.metrics)) continue
       for (const metric of scope.metrics as OtlpMetric[]) {
