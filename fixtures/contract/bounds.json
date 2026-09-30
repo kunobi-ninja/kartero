@@ -1,0 +1,7 @@
+{
+  "resourceMetrics": 4,
+  "scopesPerResource": 8,
+  "attributes": 32,
+  "bucketsPerPoint": 64,
+  "jsonBytes": 16777216
+}

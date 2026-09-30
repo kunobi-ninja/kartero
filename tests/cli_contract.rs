@@ -10,6 +10,23 @@ fn fixture(path: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(path)
 }
 
+/// The CLI refuses what the collector refuses. Both read their bounds against
+/// this file; the CLI's half is in `packages/cli/src/validate.test.ts`.
+#[test]
+fn structure_bounds_match_the_ones_the_cli_checks() {
+    let bounds: Value =
+        serde_json::from_slice(&std::fs::read(fixture("fixtures/contract/bounds.json")).unwrap())
+            .unwrap();
+    let expected = serde_json::json!({
+        "resourceMetrics": kartero::otlp::MAX_RESOURCE_METRICS,
+        "scopesPerResource": kartero::otlp::MAX_SCOPES_PER_RESOURCE,
+        "attributes": kartero::otlp::MAX_ATTRIBUTES,
+        "bucketsPerPoint": kartero::otlp::MAX_BUCKETS_PER_POINT,
+        "jsonBytes": kartero::artifact::MAX_JSON_BYTES,
+    });
+    assert_eq!(bounds, expected);
+}
+
 #[test]
 fn cli_fixture_is_accepted_by_the_rust_consumer() {
     let schema = std::fs::read(fixture("fixtures/coverage/expected/schema_version")).unwrap();

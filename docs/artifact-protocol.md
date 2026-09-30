@@ -19,6 +19,28 @@ Artifact names must start with the configured prefix. The default is
 `telemetry-otlp-v1`. Add a suffix that identifies the producer, for example
 `telemetry-otlp-v1-coverage-rust`.
 
+## Bounds
+
+The collector refuses a whole artifact that crosses any of these:
+
+| Bound | Limit |
+| --- | --- |
+| Artifact zip | 8 MiB, 16 entries, 16 MiB uncompressed |
+| `metrics.otlp.json` | 16 MiB |
+| `resourceMetrics` entries | 4 |
+| `scopeMetrics` entries per resource | 8 |
+| Attributes on a resource or a data point | 32 |
+| Buckets on a histogram point | 64 |
+
+There is no bound on metrics per scope or points per metric.
+
+A producer that writes one `resourceMetrics` entry per sample reaches four
+quickly. Merge entries that share a resource before uploading: each data point
+carries its own timestamp and attributes, so nothing is lost.
+
+`kartero validate` checks the OTLP bounds and the JSON size, so a job that
+runs it fails instead of uploading an artifact that will be refused.
+
 ## Instruments
 
 Kartero delivers `gauge`, `sum` and `histogram`. A metric carrying anything
