@@ -11,7 +11,7 @@ Update the Cargo manifest and lockfile, npm manifest and lockfile, chart, and
 version-pinned examples together. Run:
 
 ```bash
-./scripts/check-version-consistency.sh v0.4.13
+./scripts/check-version-consistency.sh v0.4.14
 ```
 
 The release workflow accepts tags whose commit is reachable from `main`. It
