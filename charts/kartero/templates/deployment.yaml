@@ -118,8 +118,14 @@ spec:
               value: {{ .Values.archive.artifactPrefix | quote }}
             - name: KARTERO_ARCHIVE_DIR
               value: {{ .Values.archive.path | quote }}
+            # int64 first: Helm reads a bare number as a float, and quoting
+            # that renders 3.3554432e+07, which the collector refuses.
             - name: KARTERO_ARCHIVE_MAX_BYTES
-              value: {{ .Values.archive.maxBytes | quote }}
+              value: {{ .Values.archive.maxBytes | int64 | quote }}
+            {{- with .Values.archive.retentionDays }}
+            - name: KARTERO_ARCHIVE_RETENTION_DAYS
+              value: {{ . | int64 | quote }}
+            {{- end }}
             {{- end }}
             {{- end }}
           volumeMounts:

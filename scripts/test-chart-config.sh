@@ -137,6 +137,9 @@ otlp:
   endpoint: http://signoz-otel-collector.signoz.svc.cluster.local:4318
   readinessUrl: http://signoz.signoz.svc.cluster.local:8080/api/v1/health?live=1
 lookback: 72h
+archive:
+  enabled: true
+  retentionDays: 45
 YAML
 helm template kartero "$root/charts/kartero" -f "$work/env-values.yaml" >"$work/env.yaml"
 
@@ -159,11 +162,16 @@ PY
 )
 env_output="$(cd "$root" && env "${env_vars[@]}" KARTERO_GITHUB_TOKEN=token cargo run --quiet -- config-check)"
 echo "$env_output"
-expected="readiness=http://signoz.signoz.svc.cluster.local:8080/api/v1/health?live=1 lookback=259200s"
-if ! grep -qF "$expected" <<<"$env_output"; then
-  echo "the pod's environment did not resolve as expected: $expected" >&2
-  exit 1
-fi
+# The archive keeps the chart's default maxBytes on purpose: Helm reads it as a
+# float, and rendered without int64 it reached the pod as 3.3554432e+07.
+for expected in \
+  "readiness=http://signoz.signoz.svc.cluster.local:8080/api/v1/health?live=1 lookback=259200s" \
+  "archive=true archive_max_bytes=33554432 archive_retention_days=45"; do
+  if ! grep -qF "$expected" <<<"$env_output"; then
+    echo "the pod's environment did not resolve as expected: $expected" >&2
+    exit 1
+  fi
+done
 helm template kartero "$root/charts/kartero" >"$work/default.yaml"
 if grep -q 'KARTERO_OTLP_READINESS_URL' "$work/default.yaml"; then
   echo "an unset otlp.readinessUrl still rendered KARTERO_OTLP_READINESS_URL" >&2

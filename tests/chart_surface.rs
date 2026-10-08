@@ -133,3 +133,53 @@ fn collect_open_objects(node: &Value, path: &str, out: &mut Vec<String>) {
         collect_open_objects(items, &format!("{path}[]"), out);
     }
 }
+
+const CONFIG_RS: &str = include_str!("../src/config.rs");
+const MAIN_RS: &str = include_str!("../src/main.rs");
+const DEPLOYMENT: &str = include_str!("../charts/kartero/templates/deployment.yaml");
+
+/// Variables the collector reads that the chart does not set, each with why.
+const NOT_SET_BY_THE_CHART: &[(&str, &str)] = &[(
+    "KARTERO_GITHUB_TOKEN_FILE",
+    "the chart sets KARTERO_GITHUB_TOKEN from a Secret instead",
+)];
+
+/// Without `sources` the chart configures the collector through environment
+/// variables, a second path a setting can go missing from. The schema test
+/// above cannot see it: a field rendered into the config file counts as
+/// rendered. `archive.retentionDays` went missing that way, so an archive
+/// configured without `sources` was never pruned.
+#[test]
+fn every_variable_the_collector_reads_is_set_by_the_chart() {
+    let read: BTreeSet<&str> = variables(CONFIG_RS).chain(variables(MAIN_RS)).collect();
+    assert!(
+        read.len() > 15,
+        "found only {} KARTERO_ variables in the source; the scan is wrong, not the chart",
+        read.len()
+    );
+    let set: BTreeSet<&str> = DEPLOYMENT
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("- name: "))
+        .filter(|name| name.starts_with("KARTERO_"))
+        .collect();
+    let exceptions: BTreeSet<&str> = NOT_SET_BY_THE_CHART.iter().map(|(name, _)| *name).collect();
+    let missing: Vec<&str> = read
+        .into_iter()
+        .filter(|name| !set.contains(name) && !exceptions.contains(name))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "the collector reads these and the chart never sets them, so the values \
+         behind them do nothing without `sources`: {missing:?}"
+    );
+}
+
+/// Every `"KARTERO_..."` string literal in a source file.
+fn variables(source: &str) -> impl Iterator<Item = &str> {
+    source.split('"').filter(|part| {
+        part.starts_with("KARTERO_")
+            && part
+                .bytes()
+                .all(|byte| byte.is_ascii_uppercase() || byte == b'_')
+    })
+}
