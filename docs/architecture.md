@@ -8,7 +8,8 @@ Kartero separates producing telemetry from delivering it.
 3. The collector lists configured GitHub Actions workflows on a trusted branch.
 4. It downloads matching artifacts, validates them, and applies `allowlist.yaml`.
 5. It adds the repository and workflow identity, then sends the payload over
-   OTLP/HTTP.
+   OTLP/HTTP. With a readiness URL set, it first checks that the store behind
+   the endpoint can take writes, and otherwise waits for the next pass.
 6. The SQLite ledger records the terminal result for that artifact.
 
 The artifact boundary keeps OTLP credentials out of GitHub Actions. A producer

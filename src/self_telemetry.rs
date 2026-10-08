@@ -40,6 +40,8 @@ pub struct AnomalyCount {
 pub struct CollectSnapshot {
     pub duration_s: f64,
     pub ok: bool,
+    /// Delivery was blocked by the OTLP readiness check and no source failed.
+    pub blocked: bool,
     pub sources: u64,
     pub runs_seen: u64,
     pub runs_trusted: u64,
@@ -436,6 +438,7 @@ mod tests {
         let body = serialize(&CollectSnapshot {
             duration_s: 1.5,
             ok: true,
+            blocked: false,
             sources: 2,
             source_status: vec![
                 SourceStatus {

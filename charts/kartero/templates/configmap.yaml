@@ -33,9 +33,14 @@ data:
     bind: "0.0.0.0:{{ .Values.service.port }}"
     interval: {{ .Values.interval | quote }}
     heartbeat_interval: {{ .Values.heartbeatInterval | quote }}
+    lookback: {{ .Values.lookback | default "24h" | quote }}
     artifact_prefix: {{ .Values.github.artifactPrefix | quote }}
     otlp:
       endpoint: {{ .Values.otlp.endpoint | quote }}
+      {{- with .Values.otlp.readinessUrl }}
+      # Nothing is delivered while this answers anything but 2xx.
+      readiness_url: {{ . | quote }}
+      {{- end }}
     allowlist: {{ printf "%s/allowlist.yaml" .Values.allowlist.mountPath | quote }}
     ledger: {{ .Values.ledger.path | quote }}
     sources:

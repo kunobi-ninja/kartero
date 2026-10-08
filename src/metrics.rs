@@ -26,6 +26,8 @@ pub struct Metrics {
     delivery_times: Mutex<BTreeMap<(String, String), u64>>,
     otlp_rejected_points: IntCounterVec,
     otlp_response_issues: IntCounterVec,
+    otlp_delivery_blocked: IntGauge,
+    otlp_readiness_checks: IntCounterVec,
     pending_count: IntGauge,
     pending_bytes: IntGauge,
     pending_expired: IntCounterVec,
@@ -41,7 +43,7 @@ impl Metrics {
         METRICS.get_or_init(Self::new)
     }
 
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let registry = Registry::new();
         let artifacts = IntCounterVec::new(
             opts!(
@@ -179,6 +181,23 @@ impl Metrics {
             &["source"],
         )
         .expect("OTLP response issues counter");
+        // 0 rather than absent when no readiness URL is set: a check that
+        // never runs never blocks anything, so 0 is the true answer there.
+        // The checks counter tells the two apart: it only moves when a URL
+        // reached the pod.
+        let otlp_delivery_blocked = IntGauge::new(
+            "kartero_otlp_delivery_blocked",
+            "1 while the last OTLP readiness check failed and collect delivers nothing, 0 otherwise.",
+        )
+        .expect("OTLP delivery blocked gauge");
+        let otlp_readiness_checks = IntCounterVec::new(
+            opts!(
+                "kartero_otlp_readiness_checks_total",
+                "OTLP readiness checks by outcome. misconfigured will not clear by waiting."
+            ),
+            &["outcome"],
+        )
+        .expect("OTLP readiness checks counter");
         let pending_count = IntGauge::new(
             "kartero_pending_metrics",
             "Metric payloads withheld by the allowlist and awaiting a rule change.",
@@ -201,6 +220,8 @@ impl Metrics {
             Box::new(source_last_delivery.clone()) as Box<dyn prometheus::core::Collector>,
             Box::new(otlp_rejected_points.clone()),
             Box::new(otlp_response_issues.clone()),
+            Box::new(otlp_delivery_blocked.clone()),
+            Box::new(otlp_readiness_checks.clone()),
             Box::new(pending_count.clone()),
             Box::new(pending_bytes.clone()),
             Box::new(pending_expired.clone()),
@@ -258,8 +279,11 @@ impl Metrics {
             let _ = series_dropped.with_label_values(&[kind]);
             let _ = series_kept.with_label_values(&[kind]);
         }
-        for outcome in ["ok", "error"] {
+        for outcome in ["ok", "error", "blocked"] {
             let _ = collect_passes.with_label_values(&[outcome]);
+        }
+        for outcome in ["ready", "unavailable", "misconfigured"] {
+            let _ = otlp_readiness_checks.with_label_values(&[outcome]);
         }
         for state in ["seen", "trusted"] {
             let _ = runs.with_label_values(&[state]);
@@ -341,6 +365,8 @@ impl Metrics {
             delivery_times: Mutex::new(BTreeMap::new()),
             otlp_rejected_points,
             otlp_response_issues,
+            otlp_delivery_blocked,
+            otlp_readiness_checks,
             pending_count,
             pending_bytes,
             pending_expired,
@@ -384,6 +410,20 @@ impl Metrics {
 
     pub fn inc_otlp_response_issue(&self, source: &str) {
         self.otlp_response_issues.with_label_values(&[source]).inc();
+    }
+
+    pub fn inc_otlp_readiness_check(&self, outcome: &str) {
+        self.otlp_readiness_checks
+            .with_label_values(&[outcome])
+            .inc();
+    }
+
+    /// Records the outcome of one readiness check and returns whether the
+    /// previous check had blocked delivery, so the caller can log a recovery.
+    pub fn set_otlp_delivery_blocked(&self, blocked: bool) -> bool {
+        let was_blocked = self.otlp_delivery_blocked.get() != 0;
+        self.otlp_delivery_blocked.set(i64::from(blocked));
+        was_blocked
     }
 
     pub fn record_delivered_families(&self, source: &str, body: &[u8]) {
@@ -470,9 +510,14 @@ impl Metrics {
 
     pub fn observe_collect(&self, snapshot: &CollectSnapshot) {
         self.collect_duration.observe(snapshot.duration_s);
-        self.collect_passes
-            .with_label_values(&[if snapshot.ok { "ok" } else { "error" }])
-            .inc();
+        let outcome = if snapshot.ok {
+            "ok"
+        } else if snapshot.blocked {
+            "blocked"
+        } else {
+            "error"
+        };
+        self.collect_passes.with_label_values(&[outcome]).inc();
         self.sources.set(snapshot.sources as i64);
         self.runs
             .with_label_values(&["seen"])
@@ -563,6 +608,30 @@ mod tests {
         assert!(encoded.contains("kartero_artifacts_total{outcome=\"rejected\"} 1"));
         assert!(encoded.contains("kartero_artifacts_total{outcome=\"skipped\"} 0"));
         assert_eq!((snapshot.rejected, snapshot.skipped), (1, 0));
+    }
+
+    /// An alert on a blocked pass or a misconfigured readiness URL needs both
+    /// series at zero from the start, and a blocked pass must not count as an
+    /// error, which pages for a different reason.
+    #[test]
+    fn blocked_passes_and_readiness_checks_have_their_own_series() {
+        let metrics = Metrics::new();
+        let encoded = metrics.encode();
+        assert!(encoded.contains("kartero_collect_passes_total{outcome=\"blocked\"} 0"));
+        assert!(
+            encoded.contains("kartero_otlp_readiness_checks_total{outcome=\"misconfigured\"} 0")
+        );
+        assert!(encoded.contains("kartero_otlp_delivery_blocked 0"));
+
+        metrics.observe_collect(&crate::self_telemetry::CollectSnapshot {
+            blocked: true,
+            ..Default::default()
+        });
+        assert!(!metrics.set_otlp_delivery_blocked(true));
+        assert!(metrics.set_otlp_delivery_blocked(false));
+        let encoded = metrics.encode();
+        assert!(encoded.contains("kartero_collect_passes_total{outcome=\"blocked\"} 1"));
+        assert!(encoded.contains("kartero_collect_passes_total{outcome=\"error\"} 0"));
     }
 
     #[test]

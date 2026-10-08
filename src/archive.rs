@@ -55,7 +55,15 @@ async fn archive_inner(
     let ledger = Ledger::open(&config.ledger_path)?;
     let mut failed = Vec::new();
     for source in &config.sources {
-        if let Err(err) = archive_source(archive, source, config.lookback, &ledger, snapshot).await
+        if let Err(err) = archive_source(
+            archive,
+            source,
+            config.lookback,
+            &config.github_api,
+            &ledger,
+            snapshot,
+        )
+        .await
         {
             warn!(source = %source.slug(), error = %err, "archiving source failed");
             failed.push(source.slug());
@@ -125,10 +133,11 @@ async fn archive_source(
     archive: &ArchiveConfig,
     source: &SourceConfig,
     lookback: std::time::Duration,
+    github_api: &str,
     ledger: &Ledger,
     snapshot: &mut ArchiveSnapshot,
 ) -> Result<()> {
-    let github = GitHub::new(source.clone())?;
+    let github = GitHub::new(source.clone(), github_api)?;
     let runs = match github.list_recent_runs(lookback).await {
         Ok(runs) => runs,
         Err(err) => {
@@ -457,6 +466,8 @@ mod tests {
                 actions: None,
             }],
             otlp_endpoint: "http://127.0.0.1:4318".into(),
+            otlp_readiness_url: None,
+            github_api: crate::github::API.into(),
             allowlist_path: "/etc/kartero/allowlist.yaml".into(),
             ledger_path: "/tmp/ledger.sqlite".into(),
             artifact_prefix: "telemetry-otlp-v1".into(),
