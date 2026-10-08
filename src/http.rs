@@ -22,7 +22,12 @@ pub async fn serve(config: Config) -> Result<()> {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    info!(%bind, version = crate::VERSION, "started");
+    info!(
+        %bind,
+        version = crate::VERSION,
+        otlp_readiness = config.otlp_readiness_url.as_deref().unwrap_or("none"),
+        "started"
+    );
 
     tokio::spawn(heartbeat(
         config.otlp_endpoint.clone(),
@@ -36,8 +41,12 @@ pub async fn serve(config: Config) -> Result<()> {
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             ticker.tick().await;
-            if let Err(err) = crate::collect::collect_once(&config).await {
-                tracing::error!(error = %err, "collect pass failed");
+            match crate::collect::collect_once(&config).await {
+                Ok(()) => {}
+                // Blocked rather than failed. The readiness check has already
+                // logged why, at the level the cause deserves.
+                Err(err) if err.is::<crate::collect::BackendNotReady>() => {}
+                Err(err) => tracing::error!(error = %err, "collect pass failed"),
             }
             if let Err(err) = crate::archive::archive_once(&config).await {
                 tracing::error!(error = %err, "archive pass failed");

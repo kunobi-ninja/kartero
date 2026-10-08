@@ -73,6 +73,12 @@ may reject points while returning HTTP 200. Kartero counts those rejections
 and records the request as terminal. Retrying the full request would resend
 the points the backend did accept.
 
+A 2xx from a collector that queues before exporting means the request was
+accepted for export, not stored. Kartero records it as delivered all the same,
+so a store outage behind the collector loses what is sent during it. A
+[readiness URL](deployment.md#wait-for-the-store) narrows that window without
+closing it.
+
 There is a crash window between an OTLP backend accepting a request and SQLite
 recording it. A restart in that window can resend the request. Two different
 artifacts can also describe overlapping windows, and Kartero cannot detect

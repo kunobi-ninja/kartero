@@ -209,6 +209,81 @@ The same signal reaches the OTLP backend as `kartero.collect.source_up`, with
 the source in the `kartero.source` attribute, and
 `kartero.collect.sources_misconfigured` counts them per pass.
 
+## Wait for the store
+
+A collector answers 2xx once it has queued a request, not once its store has
+the data. If the store is down, the collector accepts the request and drops it
+later. Kartero has already recorded the artifact as delivered by then, so it
+never sends it again.
+
+Set `otlp.readinessUrl` to a URL that answers 2xx only while the store can
+take writes:
+
+```yaml
+otlp:
+  endpoint: http://signoz-otel-collector.signoz.svc.cluster.local:4318
+  readinessUrl: http://signoz.signoz.svc.cluster.local:8080/api/v1/health?live=1
+```
+
+For SigNoz this is the query service, which runs `SELECT 1` against ClickHouse
+when the request carries `live`. `kubectl -n signoz get svc` shows the service
+name for your release. Keep `?live=1`: without it the endpoint answers 2xx
+while ClickHouse is down. The collector's own health check only describes the
+collector, so it does not help either. The check sends no credentials, and the
+URL is logged as written, so keep tokens out of it.
+
+Collect asks the URL at the start of each pass and again before each delivery.
+Only a 2xx within 10 seconds counts, and a redirect is not followed. On any
+other answer:
+
+- No collected data is sent or recorded for the rest of that pass.
+  Artifacts, derived attempts and withheld payloads stay as they were, and the
+  next pass asks again.
+- Every source is still listed, so `kartero_source_up` and token expiry stay
+  current.
+- The archive pass runs as usual, and `/readyz` still answers ok. Kartero's
+  own heartbeat and pass telemetry still go to the collector.
+
+A blocked pass counts as `kartero_collect_passes_total{outcome="blocked"}`
+rather than `error`, and `kartero_otlp_delivery_blocked` stays 1 until a check
+succeeds. Alert when it has been 1 for longer than three intervals, for
+example with `for: 3h` at the default interval:
+
+```promql
+kartero_otlp_delivery_blocked == 1
+```
+
+`kartero_otlp_readiness_checks_total{outcome}` counts the answers. If it stays
+flat with the URL set, the setting did not reach the pod. `unavailable` is a
+5xx, 408, 429, timeout or failed connection, logged at WARN. Usually that is
+the store being down, which clears by itself, but a wrong host name, a wrong
+port or an untrusted certificate fails the same way, before any answer, so the
+blocked alert above is the one that catches a wrong URL. `misconfigured` is a
+redirect or any other 4xx. Waiting will not clear it, so it is logged at ERROR
+and is worth its own alert:
+
+```promql
+increase(kartero_otlp_readiness_checks_total{outcome="misconfigured"}[2h]) > 0
+```
+
+Alerts evaluated in the same store cannot fire while it is down. The pod log
+has the reason either way.
+
+Waiting has a horizon for artifacts and derived CI metrics. A pass lists runs
+created since the UTC date `lookback` ago, which with the default `24h` means
+runs from the last 24 to 48 hours, and a run that ages out of that window
+while delivery waits is not looked at again. After a longer outage, raise
+`lookback` to cover it, within GitHub's artifact retention, until the backlog
+is delivered. Payloads withheld by the allowlist are kept in the ledger
+instead, so they wait up to their 30-day replay horizon whatever `lookback`
+is.
+
+The check narrows the window in which data is lost; it does not close it.
+Data the collector accepted just before the store failed can still be dropped,
+and a store that answers `SELECT 1` while it cannot write, for example with a
+full disk, passes the check. A persistent sending queue in the collector covers
+more of that, and for every producer.
+
 ## Archive diagnostic artifacts
 
 Off by default. Turn it on in Helm; the running Deployment (`kartero run`) then

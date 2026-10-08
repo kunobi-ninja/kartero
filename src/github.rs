@@ -75,9 +75,14 @@ pub struct ArtifactRef {
     pub expired: bool,
 }
 
+/// GitHub's REST API, which `Config::github_api` points at outside tests.
+pub const API: &str = "https://api.github.com";
+
 pub struct GitHub {
     client: reqwest::Client,
     config: SourceConfig,
+    /// The REST API base, without a trailing slash.
+    api: String,
     /// Unix seconds, or 0 when this token has no expiry or none was seen yet.
     token_expires_unix: AtomicI64,
 }
@@ -187,7 +192,7 @@ pub fn artifact_name_matches(name: &str, prefix: &str) -> bool {
 }
 
 impl GitHub {
-    pub fn new(config: SourceConfig) -> Result<Self> {
+    pub fn new(config: SourceConfig, api: &str) -> Result<Self> {
         let _ = rustls::crypto::ring::default_provider().install_default();
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(
@@ -213,6 +218,7 @@ impl GitHub {
         Ok(Self {
             client,
             config,
+            api: api.trim_end_matches('/').to_string(),
             token_expires_unix: AtomicI64::new(0),
         })
     }
@@ -242,6 +248,7 @@ impl GitHub {
         for workflow in &self.config.workflows {
             for page in 1..=MAX_RUN_PAGES {
                 let url = runs_query_url(
+                    &self.api,
                     &self.config.owner,
                     &self.config.repo,
                     workflow,
@@ -315,8 +322,8 @@ impl GitHub {
         let mut all = Vec::new();
         for page in 1..=10 {
             let url = format!(
-                "https://api.github.com/repos/{}/{}/actions/runs/{run_id}/artifacts?per_page=100&page={page}",
-                self.config.owner, self.config.repo
+                "{}/repos/{}/{}/actions/runs/{run_id}/artifacts?per_page=100&page={page}",
+                self.api, self.config.owner, self.config.repo
             );
             let response = self.client.get(url).send().await?;
             self.record_token_expiry(response.headers());
@@ -352,8 +359,8 @@ impl GitHub {
         let mut all = Vec::new();
         for page in 1..=10 {
             let url = format!(
-                "https://api.github.com/repos/{}/{}/actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=100&page={page}",
-                self.config.owner, self.config.repo
+                "{}/repos/{}/{}/actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=100&page={page}",
+                self.api, self.config.owner, self.config.repo
             );
             let response = self.client.get(url).send().await?;
             self.record_token_expiry(response.headers());
@@ -385,8 +392,8 @@ impl GitHub {
         max_bytes: usize,
     ) -> Result<Vec<u8>> {
         let url = format!(
-            "https://api.github.com/repos/{}/{}/actions/artifacts/{artifact_id}/zip",
-            self.config.owner, self.config.repo
+            "{}/repos/{}/{}/actions/artifacts/{artifact_id}/zip",
+            self.api, self.config.owner, self.config.repo
         );
         let mut response = self.client.get(url).send().await?.error_for_status()?;
         if response
@@ -720,6 +727,7 @@ mod permanent_kind_through_context {
 /// No `status` filter: an artifact is downloadable as soon as its job uploads
 /// it, and filtering here is what made every arm of a run wait for the slowest.
 fn runs_query_url(
+    api: &str,
     owner: &str,
     repo: &str,
     workflow: &str,
@@ -728,7 +736,7 @@ fn runs_query_url(
     branch: &str,
 ) -> Result<reqwest::Url> {
     let mut url = reqwest::Url::parse(&format!(
-        "https://api.github.com/repos/{owner}/{repo}/actions/workflows/{workflow}/runs\
+        "{api}/repos/{owner}/{repo}/actions/workflows/{workflow}/runs\
          ?per_page=100&page={page}&created=%3E%3D{since}"
     ))?;
     url.query_pairs_mut().append_pair("branch", branch);
@@ -796,6 +804,7 @@ mod in_progress_runs {
     #[test]
     fn the_listing_query_asks_for_runs_in_every_status() {
         let url = runs_query_url(
+            API,
             "kunobi-ninja",
             "kache",
             "bench.yml",

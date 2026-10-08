@@ -20,6 +20,9 @@ pub async fn collect_once(config: &Config) -> Result<()> {
     let result = collect_inner(config, &mut snapshot).await;
     snapshot.source_last_delivery = Metrics::global().last_deliveries();
     snapshot.ok = result.is_ok();
+    snapshot.blocked = result
+        .as_ref()
+        .is_err_and(|err| err.is::<BackendNotReady>());
     snapshot.duration_s = started.elapsed().as_secs_f64();
     Metrics::global().observe_collect(&snapshot);
     emit_self_telemetry(config, &snapshot).await;
@@ -52,11 +55,14 @@ async fn collect_inner(config: &Config, snapshot: &mut CollectSnapshot) -> Resul
         metrics.add_pending_expired(expired as u64);
         warn!(expired, "withheld metrics passed the 30-day replay horizon");
     }
-    let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .connect_timeout(Duration::from_secs(10))
-        .timeout(Duration::from_secs(60))
-        .build()?;
+    let client = delivery_client()?;
+
+    // Asked once before anything is downloaded. Once a check fails, no
+    // collected data is sent for the rest of the pass: every source delivers
+    // to the same backend.
+    // Sources are still listed, so `source_up` and token expiry stay current
+    // while delivery waits, which may be days if the URL itself is wrong.
+    let mut blocked = require_backend_ready(config, &client, metrics).await.err();
 
     // One source failing must not skip the ones after it. A repository whose
     // token expired would otherwise silently stop collection for every other
@@ -65,7 +71,14 @@ async fn collect_inner(config: &Config, snapshot: &mut CollectSnapshot) -> Resul
     for source in &config.sources {
         let slug = source.slug();
         let result = collect_source(
-            config, source, &allowlist, &ledger, &client, metrics, snapshot,
+            config,
+            source,
+            &allowlist,
+            &ledger,
+            &client,
+            metrics,
+            snapshot,
+            &mut blocked,
         )
         .await;
         metrics.set_source_up(&slug, result.is_ok());
@@ -88,10 +101,19 @@ async fn collect_inner(config: &Config, snapshot: &mut CollectSnapshot) -> Resul
             "withheld metric payloads occupy over 512 MiB of the ledger PVC"
         );
     }
+    pass_result(&failed, blocked)
+}
+
+/// A failed source outranks a block: it needs someone to act on it, and the
+/// readiness check has already logged the block.
+fn pass_result(failed: &[String], blocked: Option<anyhow::Error>) -> Result<()> {
     if !failed.is_empty() {
         bail!("collection failed for {}", failed.join(", "));
     }
-    Ok(())
+    match blocked {
+        Some(err) => Err(err),
+        None => Ok(()),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -103,8 +125,9 @@ async fn collect_source(
     client: &reqwest::Client,
     metrics: &Metrics,
     snapshot: &mut CollectSnapshot,
+    blocked: &mut Option<anyhow::Error>,
 ) -> Result<()> {
-    let github = GitHub::new(source.clone())?;
+    let github = GitHub::new(source.clone(), &config.github_api)?;
     let listed = github.list_recent_runs(config.lookback).await;
     // Recorded whatever the outcome: GitHub reports the expiry on every
     // response that carries the token, and knowing a token is days from
@@ -137,14 +160,29 @@ async fn collect_source(
         }
     };
     snapshot.runs_seen += runs.len() as u64;
+    // Blocked earlier in the pass: listed, so this source's own health is
+    // known, but nothing is downloaded or derived only to wait.
+    if blocked.is_some() {
+        return Ok(());
+    }
+    // A block met below stops delivery but not the bookkeeping: every path
+    // reaches the same exit, so an error from before the block still fails
+    // the source.
     let mut had_errors = false;
     if let Err(err) =
         replay_pending(config, source, allowlist, ledger, client, metrics, snapshot).await
     {
-        warn!(source = %source.slug(), error = %err, "replaying allowlist-held metrics failed");
-        had_errors = true;
+        if err.is::<BackendNotReady>() {
+            *blocked = Some(err);
+        } else {
+            warn!(source = %source.slug(), error = %err, "replaying allowlist-held metrics failed");
+            had_errors = true;
+        }
     }
     for run in &runs {
+        if blocked.is_some() {
+            break;
+        }
         if !github.trusted(run) {
             continue;
         }
@@ -179,6 +217,10 @@ async fn collect_source(
             )
             .await
             {
+                if err.is::<BackendNotReady>() {
+                    *blocked = Some(err);
+                    break;
+                }
                 warn!(
                     source = %source.slug(),
                     run_id = run.run_id,
@@ -192,7 +234,8 @@ async fn collect_source(
                 run_had_errors = true;
             }
         }
-        if !run_had_errors {
+        // A blocked run stays unmarked, so the next pass looks at it again.
+        if !run_had_errors && blocked.is_none() {
             ledger.mark_artifacts_scanned("collect", run.repo_id, run.run_id, run.attempt)?;
         }
     }
@@ -204,14 +247,19 @@ async fn collect_source(
         .filter(|run| run.is_completed())
         .cloned()
         .collect();
-    if let Some(actions) = source.actions.as_ref()
+    if blocked.is_none()
+        && let Some(actions) = source.actions.as_ref()
         && let Err(err) = derive_actions(
             config, source, actions, allowlist, &completed, ledger, &github, client, snapshot,
         )
         .await
     {
-        warn!(source = %source.slug(), error = %err, "deriving CI metrics failed");
-        had_errors = true;
+        if err.is::<BackendNotReady>() {
+            *blocked = Some(err);
+        } else {
+            warn!(source = %source.slug(), error = %err, "deriving CI metrics failed");
+            had_errors = true;
+        }
     }
 
     if had_errors {
@@ -424,6 +472,152 @@ async fn replay_pending(
     Ok(())
 }
 
+fn delivery_client() -> Result<reqwest::Client> {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    Ok(reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(60))
+        .build()?)
+}
+
+/// Delivery stops on this for the rest of the pass, and nothing is recorded.
+///
+/// A type of its own because every loop in a pass otherwise steps over a
+/// failure and carries on with the next artifact, attempt or source. They all
+/// deliver to the same backend, so after one failed check the rest would
+/// download and parse their payloads only to wait as well.
+#[derive(Debug)]
+pub struct BackendNotReady {
+    reason: String,
+}
+
+impl std::fmt::Display for BackendNotReady {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "OTLP backend is not ready: {}", self.reason)
+    }
+}
+
+impl std::error::Error for BackendNotReady {}
+
+/// Long enough for a loaded store to answer `SELECT 1`; short enough that a
+/// hung one costs seconds per check rather than the client's full minute.
+const READINESS_TIMEOUT: Duration = Duration::from_secs(10);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Readiness {
+    Ready,
+    /// The store may come back by itself: a 5xx, 408 or 429, or no answer.
+    Unavailable,
+    /// Waiting will not help. A redirect or any other 4xx means the URL is
+    /// wrong or needs access Kartero was not given.
+    Misconfigured,
+}
+
+impl Readiness {
+    fn of(status: StatusCode) -> Self {
+        if status.is_success() {
+            Self::Ready
+        } else if status.is_server_error()
+            || matches!(
+                status,
+                StatusCode::REQUEST_TIMEOUT | StatusCode::TOO_MANY_REQUESTS
+            )
+        {
+            Self::Unavailable
+        } else {
+            Self::Misconfigured
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::Unavailable => "unavailable",
+            Self::Misconfigured => "misconfigured",
+        }
+    }
+}
+
+/// Asks the configured readiness URL whether the store behind the OTLP
+/// endpoint can take writes. Without one, delivery goes ahead unchecked.
+///
+/// A 2xx from the collector cannot answer this. It acknowledges a body once it
+/// has queued it, so with the store down it accepts data it later drops, and
+/// the ledger records each artifact as delivered and never retries it.
+async fn require_backend_ready(
+    config: &Config,
+    client: &reqwest::Client,
+    metrics: &Metrics,
+) -> Result<()> {
+    match config.otlp_readiness_url.as_deref() {
+        Some(url) => check_readiness(client, url, READINESS_TIMEOUT, metrics).await,
+        None => Ok(()),
+    }
+}
+
+/// Only a 2xx counts. The body is not read, and a redirect is not followed: a
+/// login page in front of the real check would answer 200.
+async fn check_readiness(
+    client: &reqwest::Client,
+    url: &str,
+    timeout: Duration,
+    metrics: &Metrics,
+) -> Result<()> {
+    let (readiness, answered, reason) = match client.get(url).timeout(timeout).send().await {
+        Ok(response) => {
+            let status = response.status();
+            let reason = match response.headers().get(reqwest::header::LOCATION) {
+                // Where it points, without its query: a redirect can carry a
+                // token, and this ends up in the log.
+                Some(location) if status.is_redirection() => {
+                    let location = String::from_utf8_lossy(location.as_bytes());
+                    let target = location.split(['?', '#']).next().unwrap_or_default();
+                    format!("{url} answered {status}, redirecting to {target}")
+                }
+                _ => format!("{url} answered {status}"),
+            };
+            (Readiness::of(status), true, reason)
+        }
+        // With its causes: reqwest's own message stops at "error sending
+        // request", which is the one part every failure has in common.
+        Err(err) => (
+            Readiness::Unavailable,
+            false,
+            format!("{url} did not answer: {:#}", anyhow::Error::from(err)),
+        ),
+    };
+    metrics.inc_otlp_readiness_check(readiness.as_str());
+    let was_blocked = metrics.set_otlp_delivery_blocked(readiness != Readiness::Ready);
+    match readiness {
+        Readiness::Ready => {
+            if was_blocked {
+                info!(url, "OTLP backend is ready again; delivering");
+            }
+            return Ok(());
+        }
+        Readiness::Unavailable if answered => warn!(
+            reason = %reason,
+            "OTLP backend is not ready; deliveries wait for the next pass"
+        ),
+        // A wrong host name or an untrusted certificate fails here too, and
+        // cannot be told from a store that is down without matching on error
+        // text.
+        Readiness::Unavailable => warn!(
+            reason = %reason,
+            "OTLP readiness URL did not answer; deliveries wait for the next pass. \
+             If the store is up, check the URL's host and certificate"
+        ),
+        // Logged like a source that cannot be listed: nothing arrives until
+        // someone changes the configuration.
+        Readiness::Misconfigured => error!(
+            reason = %reason,
+            "OTLP readiness URL refuses the check; deliveries are blocked until it is fixed"
+        ),
+    }
+    Err(BackendNotReady { reason }.into())
+}
+
 /// A successful OTLP HTTP response can still reject some points. OTLP says a
 /// partial success must not be retried as a whole, because accepted delta
 /// points would be counted twice.
@@ -434,6 +628,9 @@ async fn post_metrics(
     source: &str,
     metrics: &Metrics,
 ) -> Result<StatusCode> {
+    // Per POST, not only per pass: a store that goes down halfway through a
+    // pass would otherwise take the rest of the backlog with it.
+    require_backend_ready(config, client, metrics).await?;
     let url = format!("{}/v1/metrics", config.otlp_endpoint.trim_end_matches('/'));
     let mut response = client
         .post(url)
@@ -778,8 +975,704 @@ async fn resolve_job_names(
 
 #[cfg(test)]
 mod tests {
-    use super::parse_otlp_partial;
+    use super::collect_inner;
+    use super::{
+        BackendNotReady, Readiness, check_readiness, delivery_client, parse_otlp_partial,
+        pass_result, post_metrics, replay_pending, require_backend_ready,
+    };
+    use crate::allowlist::Allowlist;
+    use crate::config::{Config, SourceConfig};
     use crate::github::artifact_name_matches;
+    use crate::ledger::{DeliveryKey, DeliveryStatus, Ledger, PendingMetrics};
+    use crate::metrics::Metrics;
+    use crate::self_telemetry::CollectSnapshot;
+    use axum::Router;
+    use axum::extract::{Path as Segments, Query, State};
+    use axum::response::IntoResponse;
+    use axum::routing::{get, post};
+    use reqwest::StatusCode;
+    use serde_json::{Value, json};
+    use std::collections::HashMap;
+    use std::path::Path;
+    use std::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    /// The store's health check and the collector's OTLP route on one port.
+    #[derive(Clone, Default)]
+    struct Backend {
+        health: Arc<AtomicU16>,
+        /// Checks from this one on answer 503, as if the store failed then.
+        fail_from: Arc<AtomicUsize>,
+        checks: Arc<AtomicUsize>,
+        posts: Arc<AtomicUsize>,
+    }
+
+    impl Backend {
+        fn answering(status: u16) -> Self {
+            let backend = Self::default();
+            backend.answer(status);
+            backend.fail_from_check(usize::MAX);
+            backend
+        }
+
+        fn fail_from_check(&self, check: usize) {
+            self.fail_from.store(check, Ordering::SeqCst);
+        }
+
+        fn answer(&self, status: u16) {
+            self.health.store(status, Ordering::SeqCst);
+        }
+
+        fn checks(&self) -> usize {
+            self.checks.load(Ordering::SeqCst)
+        }
+
+        fn posts(&self) -> usize {
+            self.posts.load(Ordering::SeqCst)
+        }
+    }
+
+    async fn serve(backend: &Backend) -> String {
+        let app = Router::new()
+            .route(
+                "/health",
+                get(|State(backend): State<Backend>| async move {
+                    let check = backend.checks.fetch_add(1, Ordering::SeqCst);
+                    let status = if check >= backend.fail_from.load(Ordering::SeqCst) {
+                        503
+                    } else {
+                        backend.health.load(Ordering::SeqCst)
+                    };
+                    axum::http::StatusCode::from_u16(status).unwrap()
+                }),
+            )
+            .route(
+                "/moved",
+                get(|| async { axum::response::Redirect::temporary("/health") }),
+            )
+            .route(
+                "/hung",
+                get(|| async {
+                    tokio::time::sleep(Duration::from_secs(60)).await;
+                    "ready, a minute late"
+                }),
+            )
+            .route(
+                "/v1/metrics",
+                post(|State(backend): State<Backend>| async move {
+                    backend.posts.fetch_add(1, Ordering::SeqCst);
+                    "{}"
+                }),
+            )
+            .with_state(backend.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        format!("http://{address}")
+    }
+
+    /// Accepts every connection and closes it unanswered. A closed port would
+    /// do the same job if nothing else could bind it in the meantime.
+    async fn hang_up() -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                drop(stream);
+            }
+        });
+        format!("http://{address}")
+    }
+
+    fn source() -> SourceConfig {
+        SourceConfig {
+            token: "token".into(),
+            owner: "owner".into(),
+            repo: "repo".into(),
+            workflows: vec!["ci.yml".into()],
+            trusted_branch: "main".into(),
+            actions: None,
+        }
+    }
+
+    fn config(endpoint: &str, readiness_url: Option<String>, ledger: &Path) -> Config {
+        Config {
+            bind: "127.0.0.1:0".into(),
+            interval: Duration::from_secs(3600),
+            heartbeat_interval: Duration::from_secs(60),
+            lookback: Duration::from_secs(86_400),
+            sources: vec![source()],
+            otlp_endpoint: endpoint.into(),
+            otlp_readiness_url: readiness_url,
+            github_api: crate::github::API.into(),
+            allowlist_path: concat!(env!("CARGO_MANIFEST_DIR"), "/allowlist.yaml").into(),
+            ledger_path: ledger.into(),
+            artifact_prefix: "telemetry-otlp-v1".into(),
+            archive: None,
+        }
+    }
+
+    async fn check(readiness_url: String, metrics: &Metrics) -> anyhow::Result<()> {
+        let config = config(
+            "http://127.0.0.1:9",
+            Some(readiness_url),
+            Path::new("unused.sqlite"),
+        );
+        require_backend_ready(&config, &delivery_client().unwrap(), metrics).await
+    }
+
+    fn checks(metrics: &Metrics, outcome: &str) -> u64 {
+        let series = format!("kartero_otlp_readiness_checks_total{{outcome=\"{outcome}\"}} ");
+        metrics
+            .encode()
+            .lines()
+            .find_map(|line| line.strip_prefix(series.as_str()))
+            .and_then(|value| value.parse().ok())
+            .unwrap_or_else(|| panic!("no series {series}"))
+    }
+
+    fn blocked(metrics: &Metrics) -> bool {
+        metrics
+            .encode()
+            .lines()
+            .any(|line| line == "kartero_otlp_delivery_blocked 1")
+    }
+
+    /// The GitHub REST API as far as a pass uses it: runs per repository,
+    /// artifacts per run (`None` answers 502) and zips. Records each request.
+    #[derive(Clone, Default)]
+    struct FakeGitHub {
+        runs: Arc<HashMap<String, Vec<Value>>>,
+        artifacts: Arc<HashMap<i64, Option<Vec<Value>>>>,
+        zips: Arc<HashMap<i64, Vec<u8>>>,
+        asked: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl FakeGitHub {
+        fn new(runs: &[(&str, &[i64])], artifacts: &[(i64, Option<&[i64]>)]) -> Self {
+            let repo_ids: HashMap<&str, i64> = runs
+                .iter()
+                .zip(1..)
+                .map(|((slug, _), id)| (*slug, id))
+                .collect();
+            let zips = artifacts
+                .iter()
+                .flat_map(|(_, ids)| ids.unwrap_or_default().iter())
+                .map(|id| (*id, telemetry_zip()))
+                .collect();
+            Self {
+                runs: Arc::new(
+                    runs.iter()
+                        .map(|(slug, ids)| {
+                            let runs = ids.iter().map(|id| run(*id, repo_ids[slug], slug));
+                            ((*slug).to_string(), runs.collect())
+                        })
+                        .collect(),
+                ),
+                artifacts: Arc::new(
+                    artifacts
+                        .iter()
+                        .map(|(run, ids)| {
+                            (
+                                *run,
+                                ids.map(|ids| ids.iter().map(|id| artifact(*id)).collect()),
+                            )
+                        })
+                        .collect(),
+                ),
+                zips: Arc::new(zips),
+                asked: Arc::default(),
+            }
+        }
+
+        fn asked(&self) -> Vec<String> {
+            self.asked.lock().unwrap().clone()
+        }
+
+        fn times_asked(&self, request: &str) -> usize {
+            self.asked()
+                .iter()
+                .filter(|asked| *asked == request)
+                .count()
+        }
+    }
+
+    async fn serve_github(github: &FakeGitHub) -> String {
+        let app = Router::new()
+            .route(
+                "/repos/{owner}/{repo}/actions/workflows/{workflow}/runs",
+                get(
+                    |State(github): State<FakeGitHub>,
+                     Segments((owner, repo, _)): Segments<(String, String, String)>,
+                     Query(query): Query<HashMap<String, String>>| async move {
+                        let slug = format!("{owner}/{repo}");
+                        github.asked.lock().unwrap().push(format!("runs {slug}"));
+                        let runs = match query.get("page").map(String::as_str) {
+                            Some("1") => github.runs.get(&slug).cloned().unwrap_or_default(),
+                            _ => Vec::new(),
+                        };
+                        axum::Json(json!({"total_count": runs.len(), "workflow_runs": runs}))
+                    },
+                ),
+            )
+            .route(
+                "/repos/{owner}/{repo}/actions/runs/{run}/artifacts",
+                get(
+                    |State(github): State<FakeGitHub>,
+                     Segments((_, _, run)): Segments<(String, String, i64)>,
+                     Query(query): Query<HashMap<String, String>>| async move {
+                        github
+                            .asked
+                            .lock()
+                            .unwrap()
+                            .push(format!("artifacts {run}"));
+                        let first_page = query.get("page").map(String::as_str) == Some("1");
+                        match github.artifacts.get(&run) {
+                            Some(None) => axum::http::StatusCode::BAD_GATEWAY.into_response(),
+                            Some(Some(artifacts)) if first_page => axum::Json(
+                                json!({"total_count": artifacts.len(), "artifacts": artifacts}),
+                            )
+                            .into_response(),
+                            _ => axum::Json(json!({"total_count": 0, "artifacts": []}))
+                                .into_response(),
+                        }
+                    },
+                ),
+            )
+            .route(
+                "/repos/{owner}/{repo}/actions/artifacts/{id}/zip",
+                get(
+                    |State(github): State<FakeGitHub>,
+                     Segments((_, _, id)): Segments<(String, String, i64)>| async move {
+                        github.asked.lock().unwrap().push(format!("zip {id}"));
+                        github.zips.get(&id).cloned().unwrap_or_default()
+                    },
+                ),
+            )
+            .with_state(github.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        format!("http://{address}")
+    }
+
+    /// Finished long ago. A pass that marks it scanned makes the next one skip
+    /// it for six hours, so a delivery on the next pass shows it was left
+    /// unmarked.
+    fn run(id: i64, repo_id: i64, slug: &str) -> Value {
+        json!({
+            "id": id,
+            "run_attempt": 1,
+            "event": "schedule",
+            "head_branch": "main",
+            "head_sha": "9f3c1ab",
+            "workflow_id": 1,
+            "name": "CI",
+            "conclusion": "success",
+            "status": "completed",
+            "repository": {"id": repo_id, "full_name": slug},
+            "created_at": "2026-01-01T00:00:00Z",
+            "run_started_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T01:00:00Z",
+            "path": ".github/workflows/ci.yml"
+        })
+    }
+
+    fn artifact(id: i64) -> Value {
+        json!({
+            "id": id,
+            "name": format!("telemetry-otlp-v1-{id}"),
+            "digest": format!("sha256:{id}"),
+            "size_in_bytes": 512,
+            "expired": false
+        })
+    }
+
+    fn telemetry_zip() -> Vec<u8> {
+        use std::io::Write;
+        let mut buf = std::io::Cursor::new(Vec::new());
+        {
+            let mut zip = zip::ZipWriter::new(&mut buf);
+            let options = zip::write::SimpleFileOptions::default();
+            zip.start_file(crate::artifact::SCHEMA_VERSION_FILE, options)
+                .unwrap();
+            zip.write_all(b"1").unwrap();
+            zip.start_file(crate::artifact::METRICS_FILE, options)
+                .unwrap();
+            zip.write_all(
+                br#"{"resourceMetrics":[{"scopeMetrics":[{"metrics":[
+                    {"name":"ci.probe.ms_per_row","gauge":{"dataPoints":[{"asDouble":3.0}]}}
+                ]}]}]}"#,
+            )
+            .unwrap();
+            zip.finish().unwrap();
+        }
+        buf.into_inner()
+    }
+
+    /// A pass over `slugs` against the fakes, with an allowlist that admits
+    /// the probe metric and a ledger that lives as long as `dir`.
+    fn pass_config(backend: &str, api: &str, slugs: &[&str], dir: &Path) -> Config {
+        let allowlist = dir.join("allowlist.yaml");
+        std::fs::write(
+            &allowlist,
+            "metrics: [ci.probe.ms_per_row]\nattributes: []\n",
+        )
+        .unwrap();
+        let mut config = config(
+            backend,
+            Some(format!("{backend}/health")),
+            &dir.join("ledger.sqlite"),
+        );
+        config.github_api = api.into();
+        config.allowlist_path = allowlist;
+        config.sources = slugs
+            .iter()
+            .map(|slug| {
+                let (owner, repo) = slug.split_once('/').unwrap();
+                SourceConfig {
+                    owner: owner.into(),
+                    repo: repo.into(),
+                    ..source()
+                }
+            })
+            .collect();
+        config
+    }
+
+    #[tokio::test]
+    async fn a_pass_blocked_from_the_start_lists_every_source_and_asks_once() {
+        let backend = Backend::answering(503);
+        let base = serve(&backend).await;
+        let github = FakeGitHub::new(
+            &[("owner/a", &[101]), ("owner/b", &[201])],
+            &[(101, Some(&[1001])), (201, Some(&[2001]))],
+        );
+        let api = serve_github(&github).await;
+        let dir = tempfile::tempdir().unwrap();
+        let config = pass_config(&base, &api, &["owner/a", "owner/b"], dir.path());
+        let mut snapshot = CollectSnapshot::default();
+
+        let err = collect_inner(&config, &mut snapshot).await.unwrap_err();
+        assert!(err.is::<BackendNotReady>(), "{err:#}");
+        assert_eq!(github.asked(), ["runs owner/a", "runs owner/b"]);
+        assert_eq!(backend.checks(), 1);
+        assert_eq!(backend.posts(), 0);
+        assert_eq!(snapshot.source_status.len(), 2);
+        assert!(snapshot.source_status.iter().all(|status| status.up));
+    }
+
+    #[tokio::test]
+    async fn a_store_that_fails_mid_pass_keeps_the_rest_for_the_next_pass() {
+        let backend = Backend::answering(200);
+        // Runs go newest first. The checks before the pass and before 1021
+        // pass; the store is gone by the check before 1022.
+        backend.fail_from_check(2);
+        let base = serve(&backend).await;
+        let github = FakeGitHub::new(
+            &[("owner/a", &[101, 102]), ("owner/b", &[201])],
+            &[
+                (102, Some(&[1021, 1022])),
+                (101, Some(&[1011])),
+                (201, Some(&[2001])),
+            ],
+        );
+        let api = serve_github(&github).await;
+        let dir = tempfile::tempdir().unwrap();
+        let config = pass_config(&base, &api, &["owner/a", "owner/b"], dir.path());
+        let mut snapshot = CollectSnapshot::default();
+
+        let err = collect_inner(&config, &mut snapshot).await.unwrap_err();
+        assert!(err.is::<BackendNotReady>(), "{err:#}");
+        assert_eq!(backend.posts(), 1);
+        assert_eq!(backend.checks(), 3);
+        // Nothing after the block is looked at, in this source or the next,
+        // which is still listed.
+        assert_eq!(github.times_asked("artifacts 101"), 0);
+        assert_eq!(github.times_asked("runs owner/b"), 1);
+        assert_eq!(github.times_asked("artifacts 201"), 0);
+        assert!(snapshot.source_status.iter().all(|status| status.up));
+
+        // The store is back. 1022 was not recorded and run 102 was not marked
+        // scanned, so this pass delivers it with 1011 and 2001. 1021 was
+        // recorded, so it is not downloaded or sent again.
+        backend.fail_from_check(usize::MAX);
+        let mut snapshot = CollectSnapshot::default();
+        collect_inner(&config, &mut snapshot).await.unwrap();
+        assert_eq!(backend.posts(), 4);
+        assert_eq!(github.times_asked("zip 1021"), 1);
+    }
+
+    #[tokio::test]
+    async fn an_error_before_a_block_still_fails_the_source() {
+        let backend = Backend::answering(200);
+        // Runs go newest first, so listing run 102's artifacts fails before
+        // artifact 1011 of run 101 meets the check that blocks it.
+        backend.fail_from_check(1);
+        let base = serve(&backend).await;
+        let github = FakeGitHub::new(
+            &[("owner/a", &[101, 102])],
+            &[(102, None), (101, Some(&[1011]))],
+        );
+        let api = serve_github(&github).await;
+        let dir = tempfile::tempdir().unwrap();
+        let config = pass_config(&base, &api, &["owner/a"], dir.path());
+        let mut snapshot = CollectSnapshot::default();
+
+        let err = collect_inner(&config, &mut snapshot).await.unwrap_err();
+        assert!(!err.is::<BackendNotReady>(), "{err:#}");
+        assert_eq!(github.times_asked("artifacts 102"), 1);
+        assert_eq!(github.times_asked("zip 1011"), 1);
+        assert_eq!(backend.posts(), 0);
+        assert_eq!(snapshot.source_status.len(), 1);
+        assert!(!snapshot.source_status[0].up);
+    }
+
+    #[tokio::test]
+    async fn a_failing_readiness_check_blocks_the_post_until_it_passes() {
+        let backend = Backend::answering(503);
+        let base = serve(&backend).await;
+        let config = config(
+            &base,
+            Some(format!("{base}/health")),
+            Path::new("unused.sqlite"),
+        );
+        let client = delivery_client().unwrap();
+        let metrics = Metrics::new();
+
+        let err = post_metrics(&config, &client, b"{}", "owner/repo", &metrics)
+            .await
+            .unwrap_err();
+        assert!(err.is::<BackendNotReady>(), "{err:#}");
+        assert_eq!(backend.posts(), 0);
+        assert_eq!(checks(&metrics, "unavailable"), 1);
+        assert!(blocked(&metrics));
+
+        backend.answer(200);
+        let status = post_metrics(&config, &client, b"{}", "owner/repo", &metrics)
+            .await
+            .unwrap();
+        assert!(status.is_success());
+        assert_eq!(backend.posts(), 1);
+        assert_eq!(checks(&metrics, "ready"), 1);
+        assert!(!blocked(&metrics));
+    }
+
+    #[tokio::test]
+    async fn without_a_readiness_url_nothing_is_checked() {
+        let backend = Backend::answering(503);
+        let base = serve(&backend).await;
+        let config = config(&base, None, Path::new("unused.sqlite"));
+        let metrics = Metrics::new();
+
+        post_metrics(
+            &config,
+            &delivery_client().unwrap(),
+            b"{}",
+            "owner/repo",
+            &metrics,
+        )
+        .await
+        .unwrap();
+        assert_eq!(backend.checks(), 0);
+        assert_eq!(backend.posts(), 1);
+        assert!(!blocked(&metrics));
+        for outcome in ["ready", "unavailable", "misconfigured"] {
+            assert_eq!(checks(&metrics, outcome), 0, "{outcome}");
+        }
+    }
+
+    #[tokio::test]
+    async fn only_a_2xx_from_the_readiness_url_counts() {
+        let backend = Backend::answering(204);
+        let base = serve(&backend).await;
+        let metrics = Metrics::new();
+        check(format!("{base}/health"), &metrics).await.unwrap();
+
+        backend.answer(404);
+        let err = check(format!("{base}/health"), &metrics).await.unwrap_err();
+        assert!(err.is::<BackendNotReady>(), "{err:#}");
+
+        // A redirect is not followed: the URL configured is the check, and
+        // the page it points to, which answers 2xx here, is never asked.
+        backend.answer(200);
+        let asked = backend.checks();
+        let err = check(format!("{base}/moved"), &metrics).await.unwrap_err();
+        assert!(err.is::<BackendNotReady>(), "{err:#}");
+        assert!(err.to_string().contains("redirecting to /health"), "{err}");
+        assert_eq!(backend.checks(), asked);
+
+        let err = check(format!("{}/health", hang_up().await), &metrics)
+            .await
+            .unwrap_err();
+        assert!(err.is::<BackendNotReady>(), "{err:#}");
+
+        assert_eq!(checks(&metrics, "ready"), 1);
+        assert_eq!(checks(&metrics, "misconfigured"), 2);
+        assert_eq!(checks(&metrics, "unavailable"), 1);
+    }
+
+    #[tokio::test]
+    async fn a_hung_readiness_check_counts_as_not_ready() {
+        let backend = Backend::answering(200);
+        let base = serve(&backend).await;
+        // The handler answers 200 after a minute, so only the timeout can
+        // turn this into an error.
+        let err = check_readiness(
+            &delivery_client().unwrap(),
+            &format!("{base}/hung"),
+            Duration::from_millis(200),
+            &Metrics::new(),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.is::<BackendNotReady>(), "{err:#}");
+    }
+
+    #[test]
+    fn waiting_can_clear_a_5xx_but_not_a_redirect_or_another_4xx() {
+        for ready in [StatusCode::OK, StatusCode::NO_CONTENT] {
+            assert_eq!(Readiness::of(ready), Readiness::Ready, "{ready}");
+        }
+        for unavailable in [
+            StatusCode::INTERNAL_SERVER_ERROR,
+            StatusCode::SERVICE_UNAVAILABLE,
+            StatusCode::REQUEST_TIMEOUT,
+            StatusCode::TOO_MANY_REQUESTS,
+        ] {
+            assert_eq!(
+                Readiness::of(unavailable),
+                Readiness::Unavailable,
+                "{unavailable}"
+            );
+        }
+        for misconfigured in [
+            StatusCode::FOUND,
+            StatusCode::BAD_REQUEST,
+            StatusCode::UNAUTHORIZED,
+            StatusCode::FORBIDDEN,
+            StatusCode::NOT_FOUND,
+            StatusCode::METHOD_NOT_ALLOWED,
+        ] {
+            assert_eq!(
+                Readiness::of(misconfigured),
+                Readiness::Misconfigured,
+                "{misconfigured}"
+            );
+        }
+    }
+
+    /// Every loop recognises a block by its type, so it has to survive the
+    /// context the callers add on the way up.
+    #[test]
+    fn a_block_is_still_a_block_under_context() {
+        let err = anyhow::Error::new(BackendNotReady {
+            reason: "503".into(),
+        })
+        .context("replaying owner/repo run 2")
+        .context("collecting owner/repo");
+        assert!(err.is::<BackendNotReady>());
+    }
+
+    #[test]
+    fn a_failed_source_outranks_a_block() {
+        let block = || {
+            Some(anyhow::Error::new(BackendNotReady {
+                reason: "503".into(),
+            }))
+        };
+        let err = pass_result(&["owner/repo".into()], block()).unwrap_err();
+        assert!(!err.is::<BackendNotReady>(), "{err:#}");
+        assert!(
+            pass_result(&[], block())
+                .unwrap_err()
+                .is::<BackendNotReady>()
+        );
+        assert!(pass_result(&[], None).is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_blocked_replay_stays_pending() {
+        let backend = Backend::answering(503);
+        let base = serve(&backend).await;
+        let dir = tempfile::tempdir().unwrap();
+        let config = config(
+            &base,
+            Some(format!("{base}/health")),
+            &dir.path().join("ledger.sqlite"),
+        );
+        let ledger = Ledger::open(&config.ledger_path).unwrap();
+        let allowlist =
+            Allowlist::parse("metrics: [ci.probe.ms_per_row]\nattributes: []\n").unwrap();
+        let key = DeliveryKey {
+            repo_id: 1,
+            run_id: 2,
+            attempt: 1,
+            artifact_id: 3,
+            digest: "sha256:abc".into(),
+            schema_version: 1,
+        };
+        let payload = br#"{"resourceMetrics":[{"scopeMetrics":[{"metrics":[
+            {"name":"ci.probe.ms_per_row","gauge":{"dataPoints":[{"asDouble":3.0}]}}
+        ]}]}]}"#;
+        let pending = PendingMetrics::artifact(
+            &key,
+            "owner/repo".into(),
+            "CI".into(),
+            "https://github.com/owner/repo".into(),
+            payload.to_vec(),
+        );
+        // Withheld under an older allowlist, so the current one replays it.
+        ledger
+            .record_with_pending(&key, DeliveryStatus::Filtered, Some(&pending), "older")
+            .unwrap();
+        let fingerprint = allowlist.fingerprint();
+        let client = delivery_client().unwrap();
+        let metrics = Metrics::new();
+        let mut snapshot = CollectSnapshot::default();
+
+        let err = replay_pending(
+            &config,
+            &source(),
+            &allowlist,
+            &ledger,
+            &client,
+            &metrics,
+            &mut snapshot,
+        )
+        .await
+        .unwrap_err();
+        assert!(err.is::<BackendNotReady>(), "{err:#}");
+        assert_eq!(backend.posts(), 0);
+        assert_eq!(
+            ledger
+                .pending_for_source("owner/repo", &fingerprint)
+                .unwrap()
+                .len(),
+            1
+        );
+
+        backend.answer(200);
+        replay_pending(
+            &config,
+            &source(),
+            &allowlist,
+            &ledger,
+            &client,
+            &metrics,
+            &mut snapshot,
+        )
+        .await
+        .unwrap();
+        assert_eq!(backend.posts(), 1);
+        assert!(
+            ledger
+                .pending_for_source("owner/repo", &fingerprint)
+                .unwrap()
+                .is_empty()
+        );
+    }
 
     #[test]
     fn otlp_partial_success_reports_rejected_points() {

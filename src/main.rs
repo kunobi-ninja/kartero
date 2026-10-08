@@ -53,8 +53,10 @@ async fn main() -> Result<()> {
                 );
             }
             println!(
-                "otlp={} allowlist={} ledger={} prefix={} archive={}",
+                "otlp={} readiness={} lookback={}s allowlist={} ledger={} prefix={} archive={}",
                 config.otlp_endpoint,
+                config.otlp_readiness_url.as_deref().unwrap_or("none"),
+                config.lookback.as_secs(),
                 config.allowlist_path.display(),
                 config.ledger_path.display(),
                 config.artifact_prefix,

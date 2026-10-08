@@ -66,7 +66,9 @@ KARTERO_LEDGER=./tmp/ledger.sqlite \
 The token needs read access to the source repository and `Actions: read`.
 Kartero stores delivery state in SQLite so a restart does not import the same
 artifact again. SigNoz is only the destination; it is not the deduplication
-store.
+store. Set `KARTERO_OTLP_READINESS_URL` so delivery waits while the store
+behind the collector is down. It narrows the window in which data is lost; see
+[Wait for the store](docs/deployment.md#wait-for-the-store).
 
 The in-cluster process is `kartero run` (the Deployment's args). `collect` is
 one pass for local debug. Archive, when enabled in Helm, writes matching

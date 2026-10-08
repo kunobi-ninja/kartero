@@ -15,6 +15,18 @@ pub struct Config {
     pub lookback: Duration,
     pub sources: Vec<SourceConfig>,
     pub otlp_endpoint: String,
+    /// A URL that answers 2xx only while the store behind the OTLP endpoint
+    /// can take writes. Collect checks it before a pass and before every POST,
+    /// and delivers nothing while it fails. `None` delivers unchecked.
+    ///
+    /// A collector acknowledges a POST once it has queued the body, not once
+    /// the store has it. When the store is down the collector still answers
+    /// 2xx and drops the data later, and the ledger has already recorded the
+    /// artifact as delivered, so nothing ever retries it.
+    pub otlp_readiness_url: Option<String>,
+    /// GitHub's REST API. Always `github::API` outside tests, which point it
+    /// at a local server; nothing reads it from the file or the environment.
+    pub github_api: String,
     pub allowlist_path: PathBuf,
     pub ledger_path: PathBuf,
     pub artifact_prefix: String,
@@ -186,9 +198,14 @@ struct FileSource {
     actions: Option<FileActions>,
 }
 
+/// Unknown keys are refused here, unlike elsewhere in the file: a misspelt
+/// `readiness_url` would otherwise switch the check off without a word.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct FileOtlp {
     endpoint: String,
+    #[serde(default)]
+    readiness_url: Option<String>,
 }
 
 fn default_bind() -> String {
@@ -270,6 +287,8 @@ impl Config {
             otlp_endpoint: std::env::var("KARTERO_OTLP_ENDPOINT").unwrap_or_else(|_| {
                 "http://signoz-otel-collector.signoz.svc.cluster.local:4318".into()
             }),
+            otlp_readiness_url: readiness_url(std::env::var("KARTERO_OTLP_READINESS_URL").ok())?,
+            github_api: crate::github::API.into(),
             allowlist_path: PathBuf::from(
                 std::env::var("KARTERO_ALLOWLIST")
                     .unwrap_or_else(|_| "/etc/kartero/allowlist.yaml".into()),
@@ -297,6 +316,8 @@ impl Config {
             lookback: parse_duration(&file.lookback)?,
             sources: resolve_sources(file.github, file.sources, &fallback)?,
             otlp_endpoint: file.otlp.endpoint,
+            otlp_readiness_url: readiness_url(file.otlp.readiness_url)?,
+            github_api: crate::github::API.into(),
             allowlist_path: file.allowlist,
             ledger_path: file.ledger,
             artifact_prefix: file.artifact_prefix,
@@ -495,6 +516,30 @@ fn parse_max_bytes(spec: &str) -> Result<usize> {
         .with_context(|| format!("archive max bytes {spec}"))
 }
 
+/// Empty means unset, so a chart that renders `""` leaves the check off rather
+/// than failing to start. Anything else must be an http(s) URL without
+/// credentials, because it is logged on every failed check.
+///
+/// The errors name the setting and never the value, not even its scheme:
+/// without `http://`, `user:password@host` parses with `user` as the scheme.
+fn readiness_url(raw: Option<String>) -> Result<Option<String>> {
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Ok(None);
+    }
+    let url = reqwest::Url::parse(raw).context("otlp readiness URL is not a URL")?;
+    if !url.username().is_empty() || url.password().is_some() {
+        bail!("otlp readiness URL must not carry credentials; it is logged on every failed check");
+    }
+    if !matches!(url.scheme(), "http" | "https") {
+        bail!("otlp readiness URL must use http or https");
+    }
+    Ok(Some(raw.to_string()))
+}
+
 fn require_github_token(token: String) -> Result<String> {
     let token = token.trim().to_string();
     if token.is_empty() {
@@ -581,6 +626,73 @@ ledger: /var/lib/kartero/ledger.sqlite
         assert_eq!(config.sources.len(), 1);
         assert_eq!(config.sources[0].slug(), "kunobi-ninja/kache");
         assert_eq!(config.sources[0].trusted_branch, "main");
+        assert_eq!(config.otlp_readiness_url, None);
+    }
+
+    #[test]
+    fn the_readiness_url_comes_from_the_otlp_block() {
+        let file = write_config(
+            "token: t
+github:
+  owner: kunobi-ninja
+  repo: kache
+otlp:
+  endpoint: http://127.0.0.1:4318
+  readiness_url: http://127.0.0.1:8080/api/v1/health?live=1
+allowlist: /etc/kartero/allowlist.yaml
+ledger: /var/lib/kartero/ledger.sqlite
+",
+        );
+        let config = Config::from_file(file.path()).unwrap();
+        assert_eq!(
+            config.otlp_readiness_url.as_deref(),
+            Some("http://127.0.0.1:8080/api/v1/health?live=1")
+        );
+    }
+
+    #[test]
+    fn a_misspelt_readiness_url_is_refused_rather_than_ignored() {
+        let file = write_config(
+            "token: t
+github:
+  owner: kunobi-ninja
+  repo: kache
+otlp:
+  endpoint: http://127.0.0.1:4318
+  readiness_ur: http://127.0.0.1:8080/api/v1/health?live=1
+allowlist: /etc/kartero/allowlist.yaml
+ledger: /var/lib/kartero/ledger.sqlite
+",
+        );
+        let error = format!("{:#}", Config::from_file(file.path()).unwrap_err());
+        assert!(error.contains("readiness_ur"), "{error}");
+    }
+
+    #[test]
+    fn a_readiness_url_is_optional_and_must_be_plain_http() {
+        assert_eq!(readiness_url(None).unwrap(), None);
+        assert_eq!(readiness_url(Some("  ".into())).unwrap(), None);
+        assert_eq!(
+            readiness_url(Some(" https://signoz:8080/api/v1/health?live=1\n".into()))
+                .unwrap()
+                .as_deref(),
+            Some("https://signoz:8080/api/v1/health?live=1")
+        );
+        assert!(readiness_url(Some("/api/v1/health".into())).is_err());
+        assert!(readiness_url(Some("ftp://signoz/health".into())).is_err());
+        // However the value is refused, a password in it never reaches the
+        // error, which ends up in the pod log.
+        for leaky in [
+            "http://user:hunter2@signoz/health",
+            "ftp://user:hunter2@signoz/health",
+            "https//user:hunter2@signoz:8080/health",
+            "user:hunter2@signoz:8080/api/v1/health",
+            "http://admin:hunter2@signoz:80800/health",
+            "hunter2:x-oauth-basic@signoz:8080/api/v1/health",
+        ] {
+            let error = format!("{:#}", readiness_url(Some(leaky.into())).unwrap_err());
+            assert!(!error.contains("hunter2"), "{error}");
+        }
     }
 
     #[test]

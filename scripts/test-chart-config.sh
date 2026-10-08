@@ -52,6 +52,10 @@ sources:
       filterJob: changes
       docsJob: Docs checks
       jobNamesArtifact: ci-job-names
+otlp:
+  endpoint: http://signoz-otel-collector.signoz.svc.cluster.local:4318
+  readinessUrl: http://signoz.signoz.svc.cluster.local:8080/api/v1/health?live=1
+lookback: 72h
 archive:
   enabled: true
   retentionDays: 30
@@ -96,6 +100,7 @@ echo "$output"
 for expected in \
   "source kunobi-ninja/kache branch=main workflows=bench.yml,ci.yml token=present" \
   "source kunobi-ninja/kunobi-frontend branch=dev workflows=ci.yaml token=present derives=yes" \
+  "readiness=http://signoz.signoz.svc.cluster.local:8080/api/v1/health?live=1 lookback=259200s" \
   "archive=true"; do
   if ! grep -qF "$expected" <<<"$output"; then
     echo "rendered chart config did not resolve as expected: $expected" >&2
@@ -124,5 +129,60 @@ if ! grep -q 'owned-by-the-deployment' "$work/rendered.yaml"; then
   echo "the deployment's allowlist did not reach the ConfigMap" >&2
   exit 1
 fi
+
+# Without `sources` the chart configures the collector through environment
+# variables instead, a second path a field can go missing from.
+cat >"$work/env-values.yaml" <<'YAML'
+otlp:
+  endpoint: http://signoz-otel-collector.signoz.svc.cluster.local:4318
+  readinessUrl: http://signoz.signoz.svc.cluster.local:8080/api/v1/health?live=1
+lookback: 72h
+YAML
+helm template kartero "$root/charts/kartero" -f "$work/env-values.yaml" >"$work/env.yaml"
+
+# Load that environment with the collector's own parser, as the pod would. The
+# token comes from a Secret in the pod, so it is the one value supplied here.
+env_vars=()
+while IFS= read -r assignment; do
+  env_vars+=("$assignment")
+done < <(python3 - "$work/env.yaml" <<'PY'
+import re
+import sys
+
+lines = open(sys.argv[1]).read().splitlines()
+for name_line, value_line in zip(lines, lines[1:]):
+    name = re.fullmatch(r'\s*- name: (KARTERO_\w+)', name_line)
+    value = re.fullmatch(r'\s*value: "(.*)"', value_line)
+    if name and value:
+        print(f"{name.group(1)}={value.group(1)}")
+PY
+)
+env_output="$(cd "$root" && env "${env_vars[@]}" KARTERO_GITHUB_TOKEN=token cargo run --quiet -- config-check)"
+echo "$env_output"
+expected="readiness=http://signoz.signoz.svc.cluster.local:8080/api/v1/health?live=1 lookback=259200s"
+if ! grep -qF "$expected" <<<"$env_output"; then
+  echo "the pod's environment did not resolve as expected: $expected" >&2
+  exit 1
+fi
+helm template kartero "$root/charts/kartero" >"$work/default.yaml"
+if grep -q 'KARTERO_OTLP_READINESS_URL' "$work/default.yaml"; then
+  echo "an unset otlp.readinessUrl still rendered KARTERO_OTLP_READINESS_URL" >&2
+  exit 1
+fi
+
+# A value the collector would refuse at startup is refused here instead. Under
+# the Recreate strategy a pod that cannot start leaves nothing running, while a
+# failed upgrade keeps the old pod.
+for refused in \
+  'signoz:8080/api/v1/health' \
+  'http://user:secret@signoz/api/v1/health' \
+  'http://signoz:bad/api/v1/health' \
+  'http://signoz:80800/api/v1/health'; do
+  printf 'otlp:\n  endpoint: http://collector:4318\n  readinessUrl: "%s"\n' "$refused" >"$work/refused.yaml"
+  if helm template kartero "$root/charts/kartero" -f "$work/refused.yaml" >/dev/null 2>&1; then
+    echo "the chart accepted otlp.readinessUrl=$refused" >&2
+    exit 1
+  fi
+done
 
 echo "chart config loads"

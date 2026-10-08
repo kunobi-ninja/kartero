@@ -56,6 +56,23 @@ sources: []
 otlp:
   # In-cluster SigNoz collector. Override per environment.
   endpoint: http://signoz-otel-collector.signoz.svc.cluster.local:4318
+  # Optional. A URL that answers 2xx only while the store behind the collector
+  # can take writes. Collect asks it at the start of each pass and before each
+  # delivery. While it answers anything else, no collected data is sent or
+  # recorded, and the next pass asks again. Empty turns the check off.
+  #
+  # Without it, a store outage loses what Kartero sends during it: a collector
+  # answers 2xx once it has queued a body, then drops it if the store is down,
+  # and Kartero has already recorded the artifact as delivered.
+  #
+  # For SigNoz, the query service checks ClickHouse at /api/v1/health?live=1.
+  # With the release and namespace the endpoint above assumes, that is
+  #   http://signoz.signoz.svc.cluster.local:8080/api/v1/health?live=1
+  # (`kubectl -n signoz get svc` shows the name). Without `?live=1` it answers
+  # 2xx while ClickHouse is down, and so does the collector's own health check.
+  # The check sends no credentials, and the URL is logged as written, so keep
+  # tokens out of it.
+  readinessUrl: ""
 
 # Optional on-cluster copy of diagnostic GitHub artifacts (kache `bench-*`
 # zips). Off by default. Independent of OTLP collect: a failed archive pass
@@ -78,6 +95,11 @@ archive:
 
 interval: 1h
 heartbeatInterval: 1m
+# How far back a pass lists runs, as a UTC date: 24h lists runs created since
+# yesterday. Artifacts and derived metrics that wait for otlp.readinessUrl are
+# retried only while their run is still listed, so widen this to catch up after
+# a longer outage.
+lookback: 24h
 
 ledger:
   path: /var/lib/kartero/ledger.sqlite
