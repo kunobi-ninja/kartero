@@ -7,7 +7,7 @@ can overwrite `metrics.otlp.json` with its complete result.
 ```yaml
 - name: Seed failure telemetry
   run: |
-    npx --yes @kunobi/kartero@0.4.14 gauge \
+    npx --yes @kunobi/kartero@0.4.15 gauge \
       --name kache.bench.verdict.ok \
       --value 0 \
       --unit 1 \
@@ -20,7 +20,7 @@ can overwrite `metrics.otlp.json` with its complete result.
 
 - name: Validate telemetry
   if: always()
-  run: npx --yes @kunobi/kartero@0.4.14 validate --input telemetry
+  run: npx --yes @kunobi/kartero@0.4.15 validate --input telemetry
 
 - name: Upload telemetry
   if: always()
