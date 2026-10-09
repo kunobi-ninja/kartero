@@ -52,15 +52,24 @@ async fn main() -> Result<()> {
                     }
                 );
             }
+            let archive = match &config.archive {
+                Some(archive) => format!(
+                    "true archive_max_bytes={} archive_retention_days={}",
+                    archive.max_bytes,
+                    archive
+                        .retention_days
+                        .map_or_else(|| "none".to_string(), |days| days.to_string())
+                ),
+                None => "false".to_string(),
+            };
             println!(
-                "otlp={} readiness={} lookback={}s allowlist={} ledger={} prefix={} archive={}",
+                "otlp={} readiness={} lookback={}s allowlist={} ledger={} prefix={} archive={archive}",
                 config.otlp_endpoint,
                 config.otlp_readiness_url.as_deref().unwrap_or("none"),
                 config.lookback.as_secs(),
                 config.allowlist_path.display(),
                 config.ledger_path.display(),
                 config.artifact_prefix,
-                config.archive.is_some()
             );
             Ok(())
         }
