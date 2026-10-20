@@ -58,3 +58,8 @@ An optional **archive** pass is a sibling of collect, not part of it. Helm
 artifacts matching a different name prefix (kache diagnostic zips, `bench-*`)
 are written to a directory, usually a second PVC. Archive failures do not skip
 OTLP delivery. The ledger PVC stays small; the archive volume holds the zips.
+
+An optional **export** pass runs after archive and reads from SigNoz instead
+of writing to it. It runs the queries in its configuration and uploads each
+job's result as one JSON document to an S3-compatible bucket. It keeps no
+ledger: every pass rewrites the documents whole. See [export](export.md).

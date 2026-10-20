@@ -1110,6 +1110,7 @@ mod tests {
             ledger_path: ledger.into(),
             artifact_prefix: "telemetry-otlp-v1".into(),
             archive: None,
+            export: None,
         }
     }
 

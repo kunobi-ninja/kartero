@@ -31,6 +31,7 @@ pub struct Config {
     pub ledger_path: PathBuf,
     pub artifact_prefix: String,
     pub archive: Option<ArchiveConfig>,
+    pub export: Option<ExportConfig>,
 }
 
 #[derive(Debug, Clone)]
@@ -46,6 +47,91 @@ pub struct ArchiveConfig {
     /// number here is the difference between a bounded cost and an outage with
     /// a delay fuse.
     pub retention_days: Option<u32>,
+}
+
+/// Reviewed SigNoz queries whose results are published to object storage.
+///
+/// The queries live here rather than in a dashboard on purpose: what a public
+/// page shows then changes only through a reviewed change to this deployment.
+/// A dashboard panel can be edited by anyone with SigNoz access, and an edit
+/// there would reach the public bucket on the next pass without anyone
+/// reviewing it.
+#[derive(Debug, Clone)]
+pub struct ExportConfig {
+    /// SigNoz query service, the one serving `/api/v5/query_range`. Not the
+    /// OTLP collector, which only ingests.
+    pub signoz_endpoint: String,
+    pub signoz_api_key: Secret,
+    pub store: StoreConfig,
+    pub jobs: Vec<ExportJob>,
+}
+
+/// An S3-compatible bucket. Path-style addressing, which R2 and MinIO both
+/// accept and which does not need the bucket name to be a valid hostname.
+#[derive(Debug, Clone)]
+pub struct StoreConfig {
+    pub endpoint: String,
+    pub bucket: String,
+    pub region: String,
+    pub access_key_id: Secret,
+    pub secret_access_key: Secret,
+}
+
+/// One published document: every query in it runs over the same window and
+/// step, so a page can line their series up point for point.
+#[derive(Debug, Clone)]
+pub struct ExportJob {
+    pub name: String,
+    /// Object key rewritten on every pass.
+    pub key: String,
+    /// Object key with a `{date}` placeholder for the UTC date, also written on
+    /// every pass, so the last pass of each day stays. It is what keeps a
+    /// history once SigNoz's own retention has dropped it.
+    pub snapshot_key: Option<String>,
+    pub window: Duration,
+    pub step: Duration,
+    /// Keep the bucket SigNoz has not closed yet. Off by default, because an
+    /// open bucket changes value until it closes. A nightly measurement lands
+    /// once per day, so its bucket is final as soon as the night's run is in;
+    /// leaving it out would publish each night a day late.
+    pub include_partial: bool,
+    pub cache_control: String,
+    pub queries: Vec<ExportQuery>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExportQuery {
+    /// Key of this query's series in the published document.
+    pub id: String,
+    /// A SigNoz v5 builder query `spec`, passed through. Kartero sets `name`
+    /// and `stepInterval` itself, so the spec may not.
+    pub spec: serde_json::Map<String, serde_json::Value>,
+}
+
+/// A credential. `Debug` prints whether one is set and nothing else, so a
+/// logged `Config` cannot carry it.
+#[derive(Clone, Default)]
+pub struct Secret(String);
+
+impl Secret {
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_tests(value: &str) -> Self {
+        Self(value.into())
+    }
+}
+
+impl std::fmt::Debug for Secret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(if self.0.is_empty() {
+            "<unset>"
+        } else {
+            "<redacted>"
+        })
+    }
 }
 
 /// One repository Kartero reads, with the workflows and branch it trusts
@@ -148,6 +234,62 @@ struct FileConfig {
     artifact_prefix: String,
     #[serde(default)]
     archive: Option<FileArchive>,
+    #[serde(default)]
+    export: Option<FileExport>,
+}
+
+/// Unknown keys are refused throughout: a misspelt `include_partial` or
+/// `snapshot_key` would otherwise change what is published without a word.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FileExport {
+    #[serde(default)]
+    enabled: bool,
+    signoz: FileSignoz,
+    store: FileStore,
+    #[serde(default)]
+    jobs: Vec<FileExportJob>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FileSignoz {
+    endpoint: String,
+    api_key_file: PathBuf,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FileStore {
+    endpoint: String,
+    bucket: String,
+    #[serde(default = "default_store_region")]
+    region: String,
+    access_key_id_file: PathBuf,
+    secret_access_key_file: PathBuf,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FileExportJob {
+    name: String,
+    key: String,
+    #[serde(default)]
+    snapshot_key: Option<String>,
+    window: String,
+    step: String,
+    #[serde(default)]
+    include_partial: bool,
+    #[serde(default = "default_cache_control")]
+    cache_control: String,
+    queries: Vec<FileExportQuery>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FileExportQuery {
+    id: String,
+    spec: serde_json::Map<String, serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -238,6 +380,14 @@ fn default_archive_dir() -> PathBuf {
 fn default_archive_max_bytes() -> usize {
     32 * 1024 * 1024
 }
+fn default_store_region() -> String {
+    // R2's region. Any S3 store accepts a region in the signature; R2 accepts
+    // only this one.
+    "auto".into()
+}
+fn default_cache_control() -> String {
+    "public, max-age=300".into()
+}
 
 impl Config {
     pub fn from_env() -> Result<Self> {
@@ -300,6 +450,9 @@ impl Config {
             artifact_prefix: std::env::var("KARTERO_ARTIFACT_PREFIX")
                 .unwrap_or_else(|_| default_prefix()),
             archive: archive_from_env()?,
+            // Queries, a destination and two credentials have no flat
+            // environment form either. Export needs KARTERO_CONFIG.
+            export: None,
         })
     }
 
@@ -322,6 +475,7 @@ impl Config {
             ledger_path: file.ledger,
             artifact_prefix: file.artifact_prefix,
             archive: archive_from_file(file.archive)?,
+            export: export_from_file(file.export)?,
         })
     }
 }
@@ -402,7 +556,10 @@ fn require_field(value: String, field: &str) -> Result<String> {
 }
 
 fn parse_duration(spec: &str) -> Result<Duration> {
-    let duration = if let Some(hours) = spec.strip_suffix('h') {
+    let duration = if let Some(days) = spec.strip_suffix('d') {
+        let n: u64 = days.parse().with_context(|| format!("duration {spec}"))?;
+        Duration::from_secs(n.saturating_mul(86_400))
+    } else if let Some(hours) = spec.strip_suffix('h') {
         let n: u64 = hours.parse().with_context(|| format!("duration {spec}"))?;
         Duration::from_secs(n.saturating_mul(3600))
     } else if let Some(minutes) = spec.strip_suffix('m') {
@@ -416,7 +573,7 @@ fn parse_duration(spec: &str) -> Result<Duration> {
             .with_context(|| format!("duration {spec}"))?;
         Duration::from_secs(n)
     } else {
-        bail!("interval {spec} must end in h, m, or s");
+        bail!("interval {spec} must end in d, h, m, or s");
     };
     if duration.is_zero() {
         bail!("interval must be greater than zero");
@@ -498,6 +655,192 @@ fn require_archive(config: ArchiveConfig) -> Result<ArchiveConfig> {
         max_bytes: config.max_bytes,
         retention_days: config.retention_days,
     })
+}
+
+/// SigNoz refuses steps under a minute, and a window this many steps wide is
+/// already more points than a page can draw.
+const MIN_EXPORT_STEP: Duration = Duration::from_secs(60);
+const MAX_EXPORT_POINTS: u64 = 10_000;
+
+fn export_from_file(file: Option<FileExport>) -> Result<Option<ExportConfig>> {
+    let Some(file) = file else {
+        return Ok(None);
+    };
+    if !file.enabled {
+        return Ok(None);
+    }
+    let signoz_endpoint = service_url(&file.signoz.endpoint, "export signoz endpoint")?;
+    let store_endpoint = service_url(&file.store.endpoint, "export store endpoint")?;
+    if file.jobs.is_empty() {
+        bail!("export is enabled with no jobs");
+    }
+    let mut jobs: Vec<ExportJob> = Vec::with_capacity(file.jobs.len());
+    for job in file.jobs {
+        let job = export_job(job)?;
+        if jobs.iter().any(|existing| existing.name == job.name) {
+            bail!("export job {} is configured twice", job.name);
+        }
+        // Two jobs writing one object would each overwrite the other on every
+        // pass, and which one a reader saw would depend on timing.
+        let keys =
+            |job: &ExportJob| std::iter::once(job.key.clone()).chain(job.snapshot_key.clone());
+        for key in keys(&job) {
+            if jobs.iter().flat_map(keys).any(|existing| existing == key) {
+                bail!("export object key {key} is written by two jobs");
+            }
+        }
+        jobs.push(job);
+    }
+    Ok(Some(ExportConfig {
+        signoz_endpoint,
+        signoz_api_key: read_secret(&file.signoz.api_key_file, "export signoz api key")?,
+        store: StoreConfig {
+            endpoint: store_endpoint,
+            bucket: require_named(file.store.bucket, "export store bucket")?,
+            region: require_named(file.store.region, "export store region")?,
+            access_key_id: read_secret(
+                &file.store.access_key_id_file,
+                "export store access key id",
+            )?,
+            secret_access_key: read_secret(
+                &file.store.secret_access_key_file,
+                "export store secret access key",
+            )?,
+        },
+        jobs,
+    }))
+}
+
+fn export_job(file: FileExportJob) -> Result<ExportJob> {
+    let name = file.name.trim().to_string();
+    if name.is_empty()
+        || !name
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+    {
+        bail!("export job name {name:?} must be lowercase letters, digits and dashes");
+    }
+    let key = object_key(&file.key, &name)?;
+    let snapshot_key = match file.snapshot_key {
+        Some(raw) => {
+            let raw = object_key(&raw, &name)?;
+            // Without the placeholder every day would overwrite one object, and
+            // the snapshot would be a second copy of `key` rather than a history.
+            if !raw.contains("{date}") {
+                bail!("export job {name}: snapshot_key must contain {{date}}");
+            }
+            Some(raw)
+        }
+        None => None,
+    };
+    let window = parse_duration(&file.window)?;
+    let step = parse_duration(&file.step)?;
+    if step < MIN_EXPORT_STEP {
+        bail!("export job {name}: step must be at least a minute");
+    }
+    if window <= step {
+        bail!("export job {name}: window must be wider than one step");
+    }
+    if window.as_secs() / step.as_secs() > MAX_EXPORT_POINTS {
+        bail!("export job {name}: window holds more than {MAX_EXPORT_POINTS} steps");
+    }
+    if file.queries.is_empty() {
+        bail!("export job {name} has no queries");
+    }
+    let mut queries: Vec<ExportQuery> = Vec::with_capacity(file.queries.len());
+    for query in file.queries {
+        let id = query.id.trim().to_string();
+        if id.is_empty()
+            || !id
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+        {
+            bail!(
+                "export job {name}: query id {id:?} must be lowercase letters, digits and underscores"
+            );
+        }
+        if queries.iter().any(|existing| existing.id == id) {
+            bail!("export job {name}: query {id} is configured twice");
+        }
+        for owned in ["name", "stepInterval"] {
+            if query.spec.contains_key(owned) {
+                bail!("export job {name}: query {id} sets {owned}, which Kartero sets itself");
+            }
+        }
+        // One aggregation per query keeps a series one number per point. Two
+        // would need the published document to say which number is which.
+        let aggregations = query
+            .spec
+            .get("aggregations")
+            .and_then(serde_json::Value::as_array)
+            .map_or(0, Vec::len);
+        if aggregations != 1 {
+            bail!("export job {name}: query {id} must have exactly one aggregation");
+        }
+        queries.push(ExportQuery {
+            id,
+            spec: query.spec,
+        });
+    }
+    Ok(ExportJob {
+        name,
+        key,
+        snapshot_key,
+        window,
+        step,
+        include_partial: file.include_partial,
+        cache_control: require_named(file.cache_control, "export cache_control")?,
+        queries,
+    })
+}
+
+/// A relative key without empty or dot segments. A leading slash or a `..`
+/// means the same object to some stores and a different one to others.
+fn object_key(raw: &str, job: &str) -> Result<String> {
+    let key = raw.trim();
+    if key.is_empty()
+        || key
+            .split('/')
+            .any(|segment| segment.is_empty() || segment == "." || segment == "..")
+    {
+        bail!(
+            "export job {job}: object key {key:?} must be a relative path without empty or dot segments"
+        );
+    }
+    Ok(key.to_string())
+}
+
+/// An http(s) URL without credentials, without a trailing slash. Credentials
+/// come from files, so one in the URL is a mistake that would also be logged.
+fn service_url(raw: &str, setting: &str) -> Result<String> {
+    let raw = raw.trim().trim_end_matches('/');
+    let url = reqwest::Url::parse(raw).with_context(|| format!("{setting} is not a URL"))?;
+    if !url.username().is_empty() || url.password().is_some() {
+        bail!("{setting} must not carry credentials");
+    }
+    if !matches!(url.scheme(), "http" | "https") {
+        bail!("{setting} must use http or https");
+    }
+    Ok(raw.to_string())
+}
+
+fn read_secret(path: &Path, setting: &str) -> Result<Secret> {
+    let value = std::fs::read_to_string(path)
+        .with_context(|| format!("reading {setting} from {}", path.display()))?
+        .trim()
+        .to_string();
+    if value.is_empty() {
+        bail!("{setting} at {} is empty", path.display());
+    }
+    Ok(Secret(value))
+}
+
+fn require_named(value: String, setting: &str) -> Result<String> {
+    let value = value.trim().to_string();
+    if value.is_empty() {
+        bail!("{setting} must not be empty");
+    }
+    Ok(value)
 }
 
 fn env_flag(name: &str) -> bool {
@@ -767,5 +1110,168 @@ sources:
         let file = write_config(&format!("token: t{TAIL}"));
         let error = Config::from_file(file.path()).unwrap_err().to_string();
         assert!(error.contains("at least one source"), "{error}");
+    }
+
+    /// Secret files for an export block, and the block itself with `jobs`
+    /// left for the caller.
+    fn export_config(jobs: &str) -> (tempfile::TempDir, tempfile::NamedTempFile) {
+        let secrets = tempfile::tempdir().unwrap();
+        for name in ["api-key", "access-key-id", "secret-access-key"] {
+            std::fs::write(secrets.path().join(name), format!("{name}-value\n")).unwrap();
+        }
+        let dir = secrets.path().display();
+        let file = write_config(&format!(
+            "token: t
+github:
+  owner: kunobi-ninja
+  repo: kache
+export:
+  enabled: true
+  signoz:
+    endpoint: http://signoz.signoz.svc.cluster.local:8080/
+    api_key_file: {dir}/api-key
+  store:
+    endpoint: https://account.r2.cloudflarestorage.com
+    bucket: kunobi-public
+    access_key_id_file: {dir}/access-key-id
+    secret_access_key_file: {dir}/secret-access-key
+  jobs:
+{jobs}{TAIL}"
+        ));
+        (secrets, file)
+    }
+
+    const BENCH_JOB: &str = "    - name: kache-bench
+      key: kache/bench/v1/latest.json
+      snapshot_key: kache/bench/v1/days/{date}.json
+      window: 90d
+      step: 1d
+      include_partial: true
+      queries:
+        - id: duration
+          spec:
+            signal: metrics
+            aggregations:
+              - metricName: kache.bench.build.duration
+                timeAggregation: avg
+                spaceAggregation: avg
+            filter:
+              expression: kache.bench.cache_tool = 'kache'
+            groupBy:
+              - name: kache.bench.project
+";
+
+    #[test]
+    fn an_export_block_resolves_its_jobs_and_reads_its_secrets() {
+        let (_secrets, file) = export_config(BENCH_JOB);
+        let config = Config::from_file(file.path()).unwrap();
+        let export = config.export.expect("export enabled");
+        assert_eq!(
+            export.signoz_endpoint,
+            "http://signoz.signoz.svc.cluster.local:8080"
+        );
+        assert_eq!(export.signoz_api_key.expose(), "api-key-value");
+        assert_eq!(export.store.region, "auto");
+        assert_eq!(
+            export.store.secret_access_key.expose(),
+            "secret-access-key-value"
+        );
+        let job = &export.jobs[0];
+        assert_eq!(job.window, Duration::from_secs(90 * 86_400));
+        assert_eq!(job.step, Duration::from_secs(86_400));
+        assert!(job.include_partial);
+        assert_eq!(job.cache_control, "public, max-age=300");
+        assert_eq!(job.queries[0].id, "duration");
+        assert_eq!(
+            job.queries[0].spec["filter"]["expression"],
+            "kache.bench.cache_tool = 'kache'"
+        );
+    }
+
+    #[test]
+    fn secrets_never_reach_debug_output() {
+        let (_secrets, file) = export_config(BENCH_JOB);
+        let config = Config::from_file(file.path()).unwrap();
+        let printed = format!("{config:?}");
+        assert!(!printed.contains("api-key-value"), "{printed}");
+        assert!(!printed.contains("secret-access-key-value"), "{printed}");
+        assert!(printed.contains("<redacted>"));
+    }
+
+    #[test]
+    fn an_export_job_that_would_publish_something_unreviewed_is_refused() {
+        for (job, expected) in [
+            (
+                BENCH_JOB.replace("include_partial", "include_partials"),
+                "unknown field",
+            ),
+            (
+                BENCH_JOB.replace("            signal: metrics\n", "            signal: metrics\n            stepInterval: 60\n"),
+                "sets stepInterval",
+            ),
+            (
+                BENCH_JOB.replace(
+                    "                spaceAggregation: avg\n",
+                    "                spaceAggregation: avg\n              - metricName: kache.bench.speedup\n",
+                ),
+                "exactly one aggregation",
+            ),
+            (
+                BENCH_JOB.replace("/days/{date}.json", "/days/latest.json"),
+                "must contain {date}",
+            ),
+            (
+                BENCH_JOB.replace("key: kache/bench", "key: ../kache/bench"),
+                "dot segments",
+            ),
+            (BENCH_JOB.replace("step: 1d", "step: 30s"), "at least a minute"),
+            (BENCH_JOB.replace("window: 90d", "window: 1d"), "wider than one step"),
+            (BENCH_JOB.replace("id: duration", "id: Build-Duration"), "lowercase"),
+            (format!("{BENCH_JOB}{BENCH_JOB}"), "configured twice"),
+        ] {
+            let (_secrets, file) = export_config(&job);
+            let error = format!("{:#}", Config::from_file(file.path()).unwrap_err());
+            assert!(error.contains(expected), "expected {expected:?} in: {error}");
+        }
+    }
+
+    #[test]
+    fn two_jobs_cannot_write_one_object() {
+        let other = BENCH_JOB
+            .replace("name: kache-bench", "name: kache-bench-copy")
+            .replace("      snapshot_key: kache/bench/v1/days/{date}.json\n", "");
+        let (_secrets, file) = export_config(&format!("{BENCH_JOB}{other}"));
+        let error = format!("{:#}", Config::from_file(file.path()).unwrap_err());
+        assert!(error.contains("written by two jobs"), "{error}");
+    }
+
+    #[test]
+    fn a_disabled_export_block_is_not_read() {
+        let file = write_config(&format!(
+            "token: t
+github:
+  owner: kunobi-ninja
+  repo: kache
+export:
+  enabled: false
+  signoz:
+    endpoint: http://signoz:8080
+    api_key_file: /nonexistent
+  store:
+    endpoint: https://r2
+    bucket: b
+    access_key_id_file: /nonexistent
+    secret_access_key_file: /nonexistent
+{TAIL}"
+        ));
+        assert!(Config::from_file(file.path()).unwrap().export.is_none());
+    }
+
+    #[test]
+    fn days_are_a_duration_unit() {
+        assert_eq!(
+            parse_duration("90d").unwrap(),
+            Duration::from_secs(90 * 86_400)
+        );
     }
 }

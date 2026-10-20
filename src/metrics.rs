@@ -35,6 +35,10 @@ pub struct Metrics {
     archive_passes: IntCounterVec,
     archive_duration: Histogram,
     archive_errors: IntCounterVec,
+    export_passes: IntCounterVec,
+    export_duration: Histogram,
+    export_jobs: IntCounterVec,
+    export_last_published: IntGaugeVec,
 }
 
 impl Metrics {
@@ -336,6 +340,54 @@ impl Metrics {
         registry
             .register(Box::new(archive_errors.clone()))
             .expect("register archive errors");
+        let export_passes = IntCounterVec::new(
+            opts!(
+                "kartero_export_passes_total",
+                "Finished export passes, split by whether any job in them failed."
+            ),
+            &["outcome"],
+        )
+        .expect("export passes counter");
+        let export_duration = Histogram::with_opts(histogram_opts!(
+            "kartero_export_duration_seconds",
+            "Wall time of one export pass, including SigNoz queries and uploads.",
+            vec![0.1, 0.5, 1.0, 5.0, 15.0, 60.0, 300.0]
+        ))
+        .expect("export duration");
+        // Labelled by job name. Names come from the deployment's configuration,
+        // so the series are bounded by what someone reviewed.
+        let export_jobs = IntCounterVec::new(
+            opts!(
+                "kartero_export_jobs_total",
+                "Export jobs attempted, split by job and outcome."
+            ),
+            &["export", "outcome"],
+        )
+        .expect("export jobs counter");
+        let export_last_published = IntGaugeVec::new(
+            opts!(
+                "kartero_export_last_published_unix",
+                "When each export job last published, as Unix seconds. An alert on its age \
+                 is the one that notices a public page going stale."
+            ),
+            &["export"],
+        )
+        .expect("export last published gauge");
+        registry
+            .register(Box::new(export_passes.clone()))
+            .expect("register export passes");
+        registry
+            .register(Box::new(export_duration.clone()))
+            .expect("register export duration");
+        registry
+            .register(Box::new(export_jobs.clone()))
+            .expect("register export jobs");
+        registry
+            .register(Box::new(export_last_published.clone()))
+            .expect("register export last published");
+        for outcome in ["ok", "error"] {
+            let _ = export_passes.with_label_values(&[outcome]);
+        }
         for outcome in ["archived", "skipped", "retryable"] {
             let _ = archive_artifacts.with_label_values(&[outcome]);
         }
@@ -374,6 +426,10 @@ impl Metrics {
             archive_passes,
             archive_duration,
             archive_errors,
+            export_passes,
+            export_duration,
+            export_jobs,
+            export_last_published,
         }
     }
 
@@ -559,6 +615,28 @@ impl Metrics {
         self.archive_errors
             .with_label_values(&["store"])
             .inc_by(snapshot.store_errors);
+    }
+
+    pub fn observe_export(&self, ok: bool, duration_s: f64) {
+        self.export_duration.observe(duration_s);
+        self.export_passes
+            .with_label_values(&[if ok { "ok" } else { "error" }])
+            .inc();
+    }
+
+    pub fn record_export_job(&self, export: &str, published: bool) {
+        self.export_jobs
+            .with_label_values(&[export, if published { "published" } else { "failed" }])
+            .inc();
+        if published {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            self.export_last_published
+                .with_label_values(&[export])
+                .set(now);
+        }
     }
 
     pub fn encode(&self) -> String {

@@ -93,6 +93,61 @@ archive:
     accessModes:
       - ReadWriteOnce
 
+# Publish reviewed SigNoz queries as JSON to an S3-compatible bucket, such as
+# Cloudflare R2. Off by default. Needs `sources`: queries have no environment
+# form, so export is configured through the rendered file only.
+#
+# The queries live here, not in a SigNoz dashboard: what a public page shows
+# then changes only through a reviewed change to these values. Each pass
+# rewrites every document, so a failed pass is repaired by the next one.
+export:
+  enabled: false
+  signoz:
+    # The query service serving /api/v5/query_range, not the OTLP collector.
+    endpoint: http://signoz.signoz.svc.cluster.local:8080
+    # Secret holding a SigNoz service-account API key.
+    existingSecret: kartero-signoz
+    existingSecretKey: api-key
+  store:
+    # For R2: https://<account id>.r2.cloudflarestorage.com
+    endpoint: ""
+    bucket: ""
+    region: auto
+    # Secret holding an access key scoped to this bucket.
+    existingSecret: kartero-export-store
+    accessKeyIdKey: access-key-id
+    secretAccessKeyKey: secret-access-key
+  jobs: []
+  #  - name: kache-bench
+  #    # Rewritten every pass.
+  #    key: kache/bench/v1/latest.json
+  #    # Optional. Written once per UTC day as well, so the history outlives
+  #    # SigNoz's retention.
+  #    snapshotKey: kache/bench/v1/days/{date}.json
+  #    window: 90d
+  #    step: 1d
+  #    # Keep the bucket SigNoz has not closed yet. Right for a nightly
+  #    # measurement, whose day is final once the night's run is in.
+  #    includePartial: true
+  #    cacheControl: "public, max-age=300"
+  #    queries:
+  #      # `spec` is a SigNoz v5 builder query, passed through. Kartero sets
+  #      # `name` and `stepInterval`; each query has one aggregation.
+  #      - id: build_duration
+  #        spec:
+  #          signal: metrics
+  #          aggregations:
+  #            - metricName: kache.bench.build.duration
+  #              timeAggregation: avg
+  #              spaceAggregation: avg
+  #          filter:
+  #            expression: "kache.bench.cache_tool = 'kache'"
+  #          groupBy:
+  #            - name: kache.bench.project
+  #            - name: kache.bench.phase
+  #          # SigNoz returns 100 series unless told otherwise.
+  #          limit: 500
+
 interval: 1h
 heartbeatInterval: 1m
 # How far back a pass lists runs, as a UTC date: 24h lists runs created since

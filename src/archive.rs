@@ -472,6 +472,7 @@ mod tests {
             ledger_path: "/tmp/ledger.sqlite".into(),
             artifact_prefix: "telemetry-otlp-v1".into(),
             archive: None,
+            export: None,
         }
     }
 
