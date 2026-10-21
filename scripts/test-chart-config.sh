@@ -59,6 +59,30 @@ lookback: 72h
 archive:
   enabled: true
   retentionDays: 30
+export:
+  enabled: true
+  store:
+    endpoint: https://account.r2.cloudflarestorage.com
+    bucket: kunobi-public
+  jobs:
+    - name: kache-bench
+      key: kache/bench/v1/latest.json
+      snapshotKey: kache/bench/v1/days/{date}.json
+      window: 90d
+      step: 1d
+      includePartial: true
+      queries:
+        - id: build_duration
+          spec:
+            signal: metrics
+            aggregations:
+              - metricName: kache.bench.build.duration
+                timeAggregation: avg
+                spaceAggregation: avg
+            filter:
+              expression: "kache.bench.cache_tool = 'kache'"
+            groupBy:
+              - name: kache.bench.project
 allowlist:
   content: |
     metric_patterns:
@@ -93,6 +117,11 @@ echo "token-a" >"$work/tokens/0/token"
 echo "token-b" >"$work/tokens/1/token"
 echo "token-c" >"$work/tokens/2/token"
 sed -i.bak "s#/etc/kartero/tokens#$work/tokens#g" "$work/kartero.yaml"
+mkdir -p "$work/export/signoz" "$work/export/store"
+echo "signoz-key" >"$work/export/signoz/api-key"
+echo "key-id" >"$work/export/store/access-key-id"
+echo "key-secret" >"$work/export/store/secret-access-key"
+sed -i.bak "s#/etc/kartero/export#$work/export#g" "$work/kartero.yaml"
 
 output="$(cd "$root" && KARTERO_CONFIG="$work/kartero.yaml" cargo run --quiet -- config-check)"
 echo "$output"
@@ -101,7 +130,8 @@ for expected in \
   "source kunobi-ninja/kache branch=main workflows=bench.yml,ci.yml token=present" \
   "source kunobi-ninja/kunobi-frontend branch=dev workflows=ci.yaml token=present derives=yes" \
   "readiness=http://signoz.signoz.svc.cluster.local:8080/api/v1/health?live=1 lookback=259200s" \
-  "archive=true"; do
+  "archive=true" \
+  "export kache-bench bucket=kunobi-public key=kache/bench/v1/latest.json snapshot=kache/bench/v1/days/{date}.json window=7776000s step=86400s queries=build_duration"; do
   if ! grep -qF "$expected" <<<"$output"; then
     echo "rendered chart config did not resolve as expected: $expected" >&2
     exit 1
@@ -120,6 +150,21 @@ fi
 # Assert against the rendered config rather than the values.
 if ! grep -q 'job_names_artifact: "ci-job-names"' "$work/kartero.yaml"; then
   echo "jobNamesArtifact did not reach the pod's config" >&2
+  exit 1
+fi
+
+# A query spec is passed through to SigNoz as written. A filter that lost its
+# quoting on the way would query something else and publish it.
+if ! grep -qF "\"expression\":\"kache.bench.cache_tool = 'kache'\"" "$work/kartero.yaml"; then
+  echo "the export query spec did not reach the pod's config intact" >&2
+  exit 1
+fi
+
+# Export has no environment form. Without sources it would be accepted and
+# do nothing, so the chart refuses it.
+printf 'export:\n  enabled: true\n' >"$work/export-no-sources.yaml"
+if helm template kartero "$root/charts/kartero" -f "$work/export-no-sources.yaml" >/dev/null 2>&1; then
+  echo "the chart accepted export without sources" >&2
   exit 1
 fi
 

@@ -416,6 +416,126 @@
     },
     "affinity": {
       "type": "object"
+    },
+    "export": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "signoz": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "endpoint": {
+              "type": "string",
+              "minLength": 1
+            },
+            "existingSecret": {
+              "type": "string",
+              "minLength": 1
+            },
+            "existingSecretKey": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "store": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "endpoint": {
+              "type": "string"
+            },
+            "bucket": {
+              "type": "string"
+            },
+            "region": {
+              "type": "string",
+              "minLength": 1
+            },
+            "existingSecret": {
+              "type": "string",
+              "minLength": 1
+            },
+            "accessKeyIdKey": {
+              "type": "string",
+              "minLength": 1
+            },
+            "secretAccessKeyKey": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "jobs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "key",
+              "window",
+              "step",
+              "queries"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "pattern": "^[a-z0-9-]+$"
+              },
+              "key": {
+                "type": "string",
+                "minLength": 1
+              },
+              "snapshotKey": {
+                "type": "string",
+                "pattern": "\\{date\\}"
+              },
+              "window": {
+                "type": "string",
+                "pattern": "^[0-9]+[dhms]$"
+              },
+              "step": {
+                "type": "string",
+                "pattern": "^[0-9]+[dhms]$"
+              },
+              "includePartial": {
+                "type": "boolean"
+              },
+              "cacheControl": {
+                "type": "string",
+                "minLength": 1
+              },
+              "queries": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "id",
+                    "spec"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "pattern": "^[a-z0-9_]+$"
+                    },
+                    "spec": {
+                      "type": "object",
+                      "description": "A SigNoz v5 builder query spec, passed through."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     }
   }
 }

@@ -11,6 +11,9 @@ spec:
 {{- fail "ledger.persistence.type=pvc is single-writer: replicaCount must be 1" }}
 {{- end }}
 {{- end }}
+{{- if and .Values.export.enabled (not .Values.sources) }}
+{{- fail "export.enabled needs sources: export is configured through the rendered file only" }}
+{{- end }}
   replicas: {{ .Values.replicaCount }}
 {{- if eq .Values.ledger.persistence.type "pvc" }}
   strategy:
@@ -141,6 +144,14 @@ spec:
               mountPath: {{ printf "/etc/kartero/tokens/%d" $index | quote }}
               readOnly: true
             {{- end }}
+            {{- if .Values.export.enabled }}
+            - name: export-signoz
+              mountPath: /etc/kartero/export/signoz
+              readOnly: true
+            - name: export-store
+              mountPath: /etc/kartero/export/store
+              readOnly: true
+            {{- end }}
             {{- end }}
             - name: ledger
               mountPath: {{ .Values.ledger.persistence.mountPath | quote }}
@@ -174,6 +185,16 @@ spec:
         - name: {{ printf "source-token-%d" $index }}
           secret:
             secretName: {{ required "each source needs existingSecret" $source.existingSecret | quote }}
+            optional: false
+        {{- end }}
+        {{- if .Values.export.enabled }}
+        - name: export-signoz
+          secret:
+            secretName: {{ required "export.signoz.existingSecret is required" .Values.export.signoz.existingSecret | quote }}
+            optional: false
+        - name: export-store
+          secret:
+            secretName: {{ required "export.store.existingSecret is required" .Values.export.store.existingSecret | quote }}
             optional: false
         {{- end }}
         {{- end }}

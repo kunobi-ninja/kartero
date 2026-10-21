@@ -104,4 +104,38 @@ data:
       retention_days: {{ . | int64 }}
       {{- end }}
     {{- end }}
+    {{- if .Values.export.enabled }}
+    {{- if not .Values.export.jobs }}{{ fail "export.enabled needs at least one export.jobs entry" }}{{ end }}
+    export:
+      enabled: true
+      signoz:
+        endpoint: {{ required "export.signoz.endpoint is required" .Values.export.signoz.endpoint | quote }}
+        api_key_file: {{ printf "/etc/kartero/export/signoz/%s" (required "export.signoz.existingSecretKey is required" .Values.export.signoz.existingSecretKey) | quote }}
+      store:
+        endpoint: {{ required "export.store.endpoint is required" .Values.export.store.endpoint | quote }}
+        bucket: {{ required "export.store.bucket is required" .Values.export.store.bucket | quote }}
+        region: {{ .Values.export.store.region | default "auto" | quote }}
+        access_key_id_file: {{ printf "/etc/kartero/export/store/%s" (required "export.store.accessKeyIdKey is required" .Values.export.store.accessKeyIdKey) | quote }}
+        secret_access_key_file: {{ printf "/etc/kartero/export/store/%s" (required "export.store.secretAccessKeyKey is required" .Values.export.store.secretAccessKeyKey) | quote }}
+      jobs:
+      {{- range .Values.export.jobs }}
+        - name: {{ required "each export job needs a name" .name | quote }}
+          key: {{ required "each export job needs a key" .key | quote }}
+          {{- with .snapshotKey }}
+          snapshot_key: {{ . | quote }}
+          {{- end }}
+          window: {{ required "each export job needs a window" .window | quote }}
+          step: {{ required "each export job needs a step" .step | quote }}
+          include_partial: {{ .includePartial | default false }}
+          {{- with .cacheControl }}
+          cache_control: {{ . | quote }}
+          {{- end }}
+          queries:
+          {{- range (required "each export job needs queries" .queries) }}
+            # A SigNoz v5 builder query, passed through as written.
+            - id: {{ required "each export query needs an id" .id | quote }}
+              spec: {{ required "each export query needs a spec" .spec | toJson }}
+          {{- end }}
+      {{- end }}
+    {{- end }}
 {{- end }}

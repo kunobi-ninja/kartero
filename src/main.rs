@@ -17,6 +17,8 @@ enum Command {
     Collect,
     /// One archive pass, then exit. For local debug; production is Helm `archive.enabled` plus a volume.
     Archive,
+    /// One export pass, then exit. For local debug; production is Helm `export.enabled`.
+    Export,
     /// Load the configuration, print the sources it resolved, and exit.
     /// Contacts nothing. Answers "will this Deployment start" without
     /// starting it, which is what makes a rendered chart testable.
@@ -32,6 +34,7 @@ async fn main() -> Result<()> {
         Command::Run => kartero::http::serve(config).await,
         Command::Collect => kartero::collect::collect_once(&config).await,
         Command::Archive => kartero::archive::archive_once(&config).await,
+        Command::Export => kartero::export::export_once(&config).await,
         Command::ConfigCheck => {
             // Tokens are never printed, only whether one resolved.
             for source in &config.sources {
@@ -71,6 +74,26 @@ async fn main() -> Result<()> {
                 config.ledger_path.display(),
                 config.artifact_prefix,
             );
+            // Credentials are never printed, and the store is named by its
+            // bucket: the endpoint carries the account id.
+            if let Some(export) = &config.export {
+                for job in &export.jobs {
+                    println!(
+                        "export {} bucket={} key={} snapshot={} window={}s step={}s queries={}",
+                        job.name,
+                        export.store.bucket,
+                        job.key,
+                        job.snapshot_key.as_deref().unwrap_or("none"),
+                        job.window.as_secs(),
+                        job.step.as_secs(),
+                        job.queries
+                            .iter()
+                            .map(|query| query.id.as_str())
+                            .collect::<Vec<_>>()
+                            .join(","),
+                    );
+                }
+            }
             Ok(())
         }
     }

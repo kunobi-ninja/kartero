@@ -90,6 +90,12 @@ helm install kartero oci://registry-1.docker.io/zondax/kartero \
 Persistent ledger storage is the chart default. Use `ephemeral` only for local
 or disposable installations. See [deployment](docs/deployment.md).
 
+## Publish SigNoz queries
+
+Kartero can also go the other way: run reviewed SigNoz queries on each pass
+and write the results as JSON to an S3-compatible bucket such as R2. A public
+page reads the JSON without SigNoz credentials. See [export](docs/export.md).
+
 ## Runtime telemetry
 
 Kartero exposes `/healthz`, `/readyz`, and Prometheus `/metrics`. It also sends
@@ -105,6 +111,7 @@ include GitHub, artifact, validation, ledger, and OTLP failures.
 - [Fallback gauges](docs/gauges.md)
 - [Artifact protocol](docs/artifact-protocol.md)
 - [Deployment](docs/deployment.md)
+- [Export to object storage](docs/export.md)
 - [Security](docs/security.md)
 - [Releasing](docs/releasing.md)
 
